@@ -13,3 +13,37 @@ body {
 h1 {
 	font-weight: 500;
 }
+
+form {
+	display: flex;
+	gap: 0.5rem;
+	max-width: 40rem;
+}
+
+input[type="text"] {
+	flex: 1;
+	padding: 0.5rem 0.7rem;
+	border: 1px solid #444;
+	border-radius: 6px;
+	background: #1a1a1a;
+	color: inherit;
+}
+
+button {
+	padding: 0.5rem 0.85rem;
+	border: 1px solid #444;
+	border-radius: 6px;
+	background: #222;
+	color: inherit;
+	cursor: pointer;
+}
+
+button:disabled {
+	opacity: 0.6;
+	cursor: wait;
+}
+
+p {
+	max-width: 40rem;
+	white-space: pre-wrap;
+}
