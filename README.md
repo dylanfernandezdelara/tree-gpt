@@ -69,3 +69,5 @@ Signed-in users persist chats here; the frontend falls back to a per-user localS
 The frontend uses the shared client in `src/auth-client.ts` and expects the Better Auth handler at `/api/auth/*`. Signed-out users see a dedicated login page with **Continue with GitHub** (`signIn.social({ provider: "github" })`).
 
 The frontend reads the session with `useSession()` and treats anything without a `user` object as signed out.
+
+Set the plaintext Worker variable `APP_ORIGIN` to the production origin so `baseURL`/`trustedOrigins` are pinned instead of derived from the request `Host`. Leave it unset locally. Note: pinning disables sign-in on preview-URL deployments.

@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 
 export function createAuth(env: Env, request: Request) {
 	const url = new URL(request.url);
-	const origin = url.origin;
+	const origin = canonicalOrigin(env, url.origin);
 
 	return betterAuth({
 		database: env.DB,
@@ -57,6 +57,29 @@ export async function getSessionUser(
 		return null;
 	}
 	return { id: user.id, email: user.email };
+}
+
+/**
+ * Canonical app origin for Better Auth's baseURL/trustedOrigins. When
+ * APP_ORIGIN is configured (production), Host-derived trust is replaced
+ * with an explicit allowlist of one, so a request arriving on any other
+ * hostname cannot widen what the session layer trusts. Unset (local dev):
+ * the request origin, preserving current behavior. An unparseable value
+ * falls back to the request origin rather than breaking auth.
+ */
+function canonicalOrigin(env: Env, requestOrigin: string): string {
+	// APP_ORIGIN is an optional plaintext Worker variable, so it is read
+	// defensively instead of added to the generated Env type.
+	const raw = (env as unknown as { APP_ORIGIN?: unknown }).APP_ORIGIN;
+	const configured = typeof raw === "string" ? raw.trim() : "";
+	if (!configured) {
+		return requestOrigin;
+	}
+	try {
+		return new URL(configured).origin;
+	} catch {
+		return requestOrigin;
+	}
 }
 
 export async function ensureDomainUser(
