@@ -21,9 +21,10 @@ Use `localhost`, not `127.0.0.1`.
 
 ## Agent worktrees
 
+- This is an AI-native codebase: always push to remote `main`. Merging locally into `main` and pushing is the expected flow.
 - In-session subagents: use built-in worktree isolation; never run `git worktree` manually.
-- Separate sessions: `git worktree add ../treeGPT-<slug> -b agent/<slug> main`, push and open a PR. Never merge locally into `main`.
-- Cleanup only after the PR merges and prod deploy is green: `git worktree remove ../treeGPT-<slug>`, `git branch -d agent/<slug>`, `git worktree prune`.
+- Separate sessions: `git worktree add ../treeGPT-<slug> -b agent/<slug> main`, merge to `main`, then `git push origin main`. Open a PR only when explicitly asked.
+- Cleanup only after prod deploy is green: `git worktree remove ../treeGPT-<slug>`, `git branch -d agent/<slug>`, `git worktree prune`.
 
 ## Models
 
