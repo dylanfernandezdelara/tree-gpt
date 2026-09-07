@@ -6,8 +6,17 @@
 -- the array on every save, so rowid is the reliable tiebreak — (created_at,
 -- id) is not, because newExchange() gives a turn and its reply the same
 -- timestamp and random ids.
+--
+-- The old tables are renamed away and the new ones are created under their
+-- final names, so no REFERENCES clause depends on RENAME TABLE rewriting
+-- foreign keys (Apple's sqlite3 ships with legacy_alter_table on and does
+-- not rewrite them; D1 does). Indexes come last because the old tables own
+-- chats_user_updated until they are dropped.
 
-CREATE TABLE messages_v2 (
+ALTER TABLE messages RENAME TO messages_old;
+ALTER TABLE chats RENAME TO chats_old;
+
+CREATE TABLE messages (
   id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   root_id TEXT NOT NULL,
@@ -23,11 +32,11 @@ CREATE TABLE messages_v2 (
   CHECK (status = 'done' OR role = 'assistant'),
   CHECK (role = 'assistant' OR reasoning IS NULL),
   UNIQUE (id, user_id),
-  FOREIGN KEY (parent_id, user_id) REFERENCES messages_v2(id, user_id) ON DELETE CASCADE,
-  FOREIGN KEY (root_id, user_id) REFERENCES messages_v2(id, user_id) ON DELETE CASCADE
+  FOREIGN KEY (parent_id, user_id) REFERENCES messages(id, user_id) ON DELETE CASCADE,
+  FOREIGN KEY (root_id, user_id) REFERENCES messages(id, user_id) ON DELETE CASCADE
 );
 
-CREATE TABLE chats_v2 (
+CREATE TABLE chats (
   id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   root_id TEXT,      -- NULL only while the chat has no messages
@@ -36,32 +45,30 @@ CREATE TABLE chats_v2 (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CHECK ((root_id IS NULL) = (leaf_id IS NULL)),
-  FOREIGN KEY (leaf_id, user_id) REFERENCES messages_v2(id, user_id) ON DELETE RESTRICT,
-  FOREIGN KEY (root_id, user_id) REFERENCES messages_v2(id, user_id) ON DELETE CASCADE
+  FOREIGN KEY (leaf_id, user_id) REFERENCES messages(id, user_id) ON DELETE RESTRICT,
+  FOREIGN KEY (root_id, user_id) REFERENCES messages(id, user_id) ON DELETE CASCADE
 );
 
 -- Parent-first insert so immediate self-FKs succeed under foreign_keys=ON.
-INSERT INTO messages_v2 (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at)
+INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at)
 SELECT m.id, c.user_id,
        FIRST_VALUE(m.id) OVER w, LAG(m.id) OVER w, ROW_NUMBER() OVER w - 1,
        m.role, 'done', m.content, substr(m.reasoning, 1, 4000), m.created_at
-FROM messages m JOIN chats c ON c.id = m.chat_id
+FROM messages_old m JOIN chats_old c ON c.id = m.chat_id
 WINDOW w AS (PARTITION BY m.chat_id ORDER BY m.created_at, m.rowid)
 ORDER BY m.chat_id, m.created_at, m.rowid;
 
-INSERT INTO chats_v2 (id, user_id, root_id, leaf_id, title, created_at, updated_at)
+INSERT INTO chats (id, user_id, root_id, leaf_id, title, created_at, updated_at)
 SELECT c.id, c.user_id, last.root_id, last.id, c.title, c.created_at, c.updated_at
-FROM chats c LEFT JOIN (
+FROM chats_old c LEFT JOIN (
   SELECT id, root_id, chat_id, ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY depth DESC) AS rn
-  FROM messages_v2 JOIN messages USING (id)
+  FROM messages JOIN messages_old USING (id)
 ) last ON last.chat_id = c.id AND last.rn = 1;
 
-DROP TABLE messages;
-DROP TABLE chats;
-ALTER TABLE messages_v2 RENAME TO messages;
-ALTER TABLE chats_v2 RENAME TO chats;
+-- Child before parent so the implicit DELETE of a DROP never trips a FK.
+DROP TABLE messages_old;
+DROP TABLE chats_old;
 
--- Indexes after the rename: SQLite keeps index names across RENAME TABLE.
 CREATE INDEX messages_parent ON messages (parent_id);
 CREATE INDEX messages_root ON messages (user_id, root_id);
 CREATE INDEX chats_user_updated ON chats (user_id, updated_at DESC);
