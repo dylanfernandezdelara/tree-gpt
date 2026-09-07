@@ -11,6 +11,32 @@
 
 export type Role = "user" | "assistant";
 
+/**
+ * Allowlisted chat models. The Worker is authoritative: any `model` outside
+ * this catalog is rejected with 400 before quota or upstream work. The UI
+ * imports this list so the selector cannot drift from the backend.
+ *
+ * Prices are per million tokens (live OpenRouter catalog, Sep 2026):
+ * - Muse Spark 1.3 Contributor: $0.10 in / $0.20 out (default)
+ * - GPT-5.6 Luna: $0.20 in / $1.20 out
+ * - Qwen3.7 Flash: $0.03 in / $0.13 out, 1M context
+ */
+export const CHAT_MODELS = [
+	{ id: "meta/muse-spark-1.3-contributor", label: "Muse Spark" },
+	{ id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna" },
+	{ id: "qwen/qwen3.7-flash", label: "Qwen3.7 Flash" },
+] as const;
+
+export type ModelId = (typeof CHAT_MODELS)[number]["id"];
+
+export const DEFAULT_MODEL: ModelId = "meta/muse-spark-1.3-contributor";
+
+export function isModelId(value: unknown): value is ModelId {
+	return (
+		typeof value === "string" && CHAT_MODELS.some((model) => model.id === value)
+	);
+}
+
 /** Branch pointers per user. */
 export const MAX_CHATS = 100;
 /** Nodes on any root-to-leaf path (schema CHECK: depth < MAX_DEPTH). */
@@ -73,6 +99,8 @@ export type TurnRequest = {
 	title?: string;
 	/** True = SSE response (TurnStreamEvent). Absent = JSON TurnResponse. */
 	stream?: boolean;
+	/** Allowlisted model id. Omitted = DEFAULT_MODEL (Muse Spark). */
+	model?: ModelId;
 };
 
 export type TurnResponse =

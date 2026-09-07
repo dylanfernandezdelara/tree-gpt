@@ -1,8 +1,7 @@
 import { getSessionUser } from "./auth.js";
-import { isRole } from "./tree-types.js";
+import { DEFAULT_MODEL, isModelId, isRole, type ModelId } from "./tree-types.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
-const CHAT_MODEL = "meta/muse-spark-1.3-contributor";
 
 const MAX_TURN_CHARS = 8_000;
 const MAX_HISTORY = 50;
@@ -69,11 +68,13 @@ export async function handleOpenRouterRequest(
 	if (parsed.stream) {
 		return requestStreamCompletion(env, parsed.messages, {
 			origin: new URL(request.url).origin,
+			model: parsed.model,
 		});
 	}
 
 	const completion = await requestCompletion(env, parsed.messages, {
 		origin: new URL(request.url).origin,
+		model: parsed.model,
 	});
 	if (!completion.ok) {
 		return Response.json(
@@ -138,10 +139,34 @@ export async function checkRateLimit(
 	}
 }
 
+export type CompletionOptions = { sessionId?: string; origin?: string; model?: ModelId };
+
+/**
+ * Model-compatible low-cost reasoning settings (live catalog, Sep 2026).
+ * Muse reasoning is mandatory with `minimal` in supported_efforts, so that
+ * is the fastest legal setting. Luna lists `none` in supported_efforts with
+ * reasoning optional, so disable it outright. Qwen exposes no effort levels
+ * but supports `max_tokens`, so use a small explicit token budget.
+ */
+export function reasoningFor(
+	model: ModelId,
+	stream: boolean,
+): Record<string, string | number | boolean> {
+	const exclude: Record<string, boolean> = stream ? {} : { exclude: true };
+	switch (model) {
+		case "openai/gpt-5.6-luna":
+			return { effort: "none", ...exclude };
+		case "qwen/qwen3.7-flash":
+			return { max_tokens: 512, ...exclude };
+		default:
+			return { effort: "minimal", ...exclude };
+	}
+}
+
 export async function requestCompletion(
 	env: Env,
 	messages: readonly CompletionMessage[],
-	options?: { sessionId?: string; origin?: string },
+	options?: CompletionOptions,
 ): Promise<{ ok: true; value: Completion } | { ok: false; error: CompletionFailure }> {
 	if (!env.OPENROUTER_API_KEY) {
 		return {
@@ -153,14 +178,15 @@ export async function requestCompletion(
 		};
 	}
 
+	const model = options?.model ?? DEFAULT_MODEL;
 	const body: {
 		model: string;
 		messages: OpenRouterMessage[];
 		max_tokens: number;
-		reasoning: { effort: "minimal"; exclude: true };
+		reasoning: Record<string, string | number | boolean>;
 		session_id?: string;
 	} = {
-		model: CHAT_MODEL,
+		model,
 		messages: toOpenRouterMessages(messages),
 		// Muse Spark still spends some of max_tokens on hidden reasoning even
 		// at "minimal". 1024 often finishes with content: null and
@@ -169,11 +195,9 @@ export async function requestCompletion(
 		// keeps the non-streaming reply small so the reader is not left
 		// waiting on thinking bytes, and leaves nothing to store or echo.
 		// `exclude` is part of the unified reasoning object all OpenRouter
-		// models accept, and the live catalog lists `minimal` in this
-		// model's supported_efforts with reasoning mandatory — so this is
-		// the fastest legal setting, no fallback needed.
+		// models accept.
 		max_tokens: 4096,
-		reasoning: { effort: "minimal", exclude: true },
+		reasoning: reasoningFor(model, false),
 	};
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
@@ -254,7 +278,7 @@ const MAX_STREAM_REASONING_CHARS = 8_000;
 export async function openStreamCompletion(
 	env: Env,
 	messages: readonly CompletionMessage[],
-	options?: { sessionId?: string; origin?: string },
+	options?: CompletionOptions,
 ): Promise<
 	{ ok: true; events: ReadableStream<UpstreamEvent> } | { ok: false; error: CompletionFailure }
 > {
@@ -265,6 +289,7 @@ export async function openStreamCompletion(
 		};
 	}
 
+	const model = options?.model ?? DEFAULT_MODEL;
 	// Streaming wants the trace (no `exclude`) so the UI can show thinking
 	// live. History still carries role/content only, so the input side of
 	// the latency fix is unchanged.
@@ -277,10 +302,10 @@ export async function openStreamCompletion(
 			"X-Title": "treeGPT",
 		},
 		body: JSON.stringify({
-			model: CHAT_MODEL,
+			model,
 			messages: toOpenRouterMessages(messages),
 			max_tokens: 4096,
-			reasoning: { effort: "minimal" },
+			reasoning: reasoningFor(model, true),
 			stream: true,
 			...(options?.sessionId ? { session_id: options.sessionId } : {}),
 		}),
@@ -294,13 +319,13 @@ export async function openStreamCompletion(
 		};
 	}
 
-	return { ok: true, events: translateStream(upstream.body) };
+	return { ok: true, events: translateStream(upstream.body, model) };
 }
 
 export async function requestStreamCompletion(
 	env: Env,
 	messages: readonly CompletionMessage[],
-	options?: { sessionId?: string; origin?: string },
+	options?: CompletionOptions,
 ): Promise<Response> {
 	const opened = await openStreamCompletion(env, messages, options);
 	if (!opened.ok) {
@@ -352,11 +377,14 @@ export function encodeSse<T extends { type: string }>(): TransformStream<T, Uint
  * `reasoning_details` deltas become display-only `reasoning` text: they are
  * never stored server-side and never echoed on later turns.
  */
-function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<UpstreamEvent> {
+function translateStream(
+	upstream: ReadableStream<Uint8Array>,
+	fallbackModel: string = DEFAULT_MODEL,
+): ReadableStream<UpstreamEvent> {
 	const decoder = new TextDecoder();
 	const reader = upstream.getReader();
 	let buffer = "";
-	let model = CHAT_MODEL;
+	let model = fallbackModel;
 	let reasoningSent = 0;
 	let finished = false;
 
@@ -519,7 +547,9 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 
 function parseCompletionRequest(
 	body: unknown,
-): { ok: true; messages: CompletionMessage[]; stream: boolean } | { ok: false; error: string } {
+):
+	| { ok: true; messages: CompletionMessage[]; stream: boolean; model: ModelId }
+	| { ok: false; error: string } {
 	if (typeof body !== "object" || body === null) {
 		return { ok: false, error: "Invalid JSON body" };
 	}
@@ -538,8 +568,16 @@ function parseCompletionRequest(
 
 	const stream = "stream" in body && body.stream === true;
 
+	let model: ModelId = DEFAULT_MODEL;
+	if ("model" in body && body.model !== undefined) {
+		if (!isModelId(body.model)) {
+			return { ok: false, error: "model is not supported" };
+		}
+		model = body.model;
+	}
+
 	if (!("messages" in body) || body.messages === undefined) {
-		return { ok: true, messages: [{ role: "user", content: message }], stream };
+		return { ok: true, messages: [{ role: "user", content: message }], stream, model };
 	}
 
 	const history = parseMessages(body.messages);
@@ -548,10 +586,10 @@ function parseCompletionRequest(
 	}
 
 	if (history.messages.length === 0) {
-		return { ok: true, messages: [{ role: "user", content: message }], stream };
+		return { ok: true, messages: [{ role: "user", content: message }], stream, model };
 	}
 
-	return { ok: true, messages: history.messages, stream };
+	return { ok: true, messages: history.messages, stream, model };
 }
 
 function parseMessages(

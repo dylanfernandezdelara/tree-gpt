@@ -74,6 +74,39 @@ describe("sendChatStream", () => {
 		expect(sent.stream).toBe(true);
 	});
 
+	it("sends the selected model with the request", async () => {
+		fetchMock.mockResolvedValue(
+			sseResponse(`data: {"type":"done","model":"openai/gpt-5.6-luna"}\n\n`),
+		);
+		const result = await sendChatStream(
+			[{ role: "user", content: "hi" }],
+			new AbortController().signal,
+			() => {},
+			{ model: "openai/gpt-5.6-luna" },
+		);
+
+		expect(result).toEqual({ ok: true, model: "openai/gpt-5.6-luna" });
+		const sent = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(sent.model).toBe("openai/gpt-5.6-luna");
+		expect(sent.stream).toBe(true);
+	});
+
+	it("omits the model field when no model is selected", async () => {
+		fetchMock.mockResolvedValue(
+			sseResponse(`data: {"type":"done","model":"meta/muse-spark-1.3-contributor"}\n\n`),
+		);
+		await sendChatStream([{ role: "user", content: "hi" }], new AbortController().signal, () => {});
+
+		const sent = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect("model" in sent).toBe(false);
+	});
+
 	it("surfaces mid-stream errors", async () => {
 		fetchMock.mockResolvedValue(
 			sseResponse(`data: {"type":"content","text":"Hello"}\n\n` + `data: {"type":"error","error":"boom"}\n\n`),

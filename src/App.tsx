@@ -3,6 +3,7 @@ import { LoginPage } from "./LoginPage";
 import { ChatPane } from "./components/ChatPane";
 import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
+import { ModelSelector } from "./components/ModelSelector";
 import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
@@ -23,11 +24,13 @@ import {
 import {
 	loadLayout,
 	loadLocalChats,
+	loadSelectedModel,
 	loadSidebarOpen,
 	newId,
 	persistableFields,
 	saveLayout,
 	saveLocalChats,
+	saveSelectedModel,
 	saveSidebarOpen,
 	titleFromMessage,
 } from "./lib/storage";
@@ -73,6 +76,7 @@ function App() {
 function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
+	const [model, setModel] = useState(loadSelectedModel);
 	/** Composer text per pane id. */
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	/** Chats with a reply in flight (one request per chat; chats run concurrently). */
@@ -140,6 +144,10 @@ function ChatApp({ user }: { user: AuthUser }) {
 	useEffect(() => {
 		saveSidebarOpen(sidebarOpen);
 	}, [sidebarOpen]);
+
+	useEffect(() => {
+		saveSelectedModel(model);
+	}, [model]);
 
 	const chats = active?.chats ?? NO_CHATS;
 	const layout = active?.layout ?? null;
@@ -229,7 +237,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		setDrafts((prev) => ({ ...prev, [paneId]: value }));
 	}
 
-	async function request(chatId: string, replyId: string, history: ChatTurn[]) {
+	async function request(chatId: string, replyId: string, history: ChatTurn[], requestModel: typeof model) {
 		pendingRef.current.get(chatId)?.abort();
 		const controller = new AbortController();
 		pendingRef.current.set(chatId, controller);
@@ -249,7 +257,9 @@ function ChatApp({ user }: { user: AuthUser }) {
 			});
 		};
 		try {
-			const result = await sendChatStream(history, controller.signal, applyUpdate);
+			const result = await sendChatStream(history, controller.signal, applyUpdate, {
+				model: requestModel,
+			});
 			if (result.ok && content.trim()) {
 				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
 				setReply(chatId, replyId, {
@@ -329,7 +339,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 				chats: [branched, ...prev.chats],
 				layout: setPaneChat(prev.layout, paneId, branched.id),
 			}));
-			void request(branched.id, reply.id, history);
+			void request(branched.id, reply.id, history, model);
 		} else if (chat) {
 			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
 			updateChat(chat.id, (current) => ({
@@ -337,7 +347,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 				updatedAt: now,
 				messages: [...current.messages, userMessage, reply],
 			}));
-			void request(chat.id, reply.id, history);
+			void request(chat.id, reply.id, history, model);
 		} else {
 			const created: Chat = {
 				id: newId(),
@@ -351,7 +361,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 				chats: [created, ...prev.chats],
 				layout: setPaneChat(prev.layout, paneId, created.id),
 			}));
-			void request(created.id, reply.id, [{ role: "user", content }]);
+			void request(created.id, reply.id, [{ role: "user", content }], model);
 		}
 	}
 
@@ -379,7 +389,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 			error: false,
 			reasoning: undefined,
 		});
-		void request(chat.id, messageId, history);
+		void request(chat.id, messageId, history, model);
 	}
 
 	function stop(paneId: string) {
@@ -448,6 +458,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 							</IconButton>
 						</>
 					)}
+					<ModelSelector value={model} onChange={setModel} />
 					<div className="main__header-spacer" />
 					{sidebarOpen ? null : (
 						<UserMenu user={user} placement="down" compact onLogOut={logOut} />

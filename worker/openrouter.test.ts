@@ -317,3 +317,107 @@ describe("handleOpenRouterRequest", () => {
 		});
 	});
 });
+
+describe("model allowlist", () => {
+	const fetchMock = vi.fn();
+
+	beforeEach(() => {
+		fetchMock.mockReset();
+		vi.stubGlobal("fetch", fetchMock);
+	});
+
+	function post(body: unknown): Request {
+		return new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	}
+
+	it("defaults omitted model to Muse Spark", async () => {
+		fetchMock.mockResolvedValue(upstreamOk(chatPayload("hello")));
+		const response = await handleOpenRouterRequest(post({ message: "hi" }), env());
+		expect(response.status).toBe(200);
+		const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(upstream.model).toBe("meta/muse-spark-1.3-contributor");
+		expect(upstream.reasoning).toEqual({ effort: "minimal", exclude: true });
+	});
+
+	it("sends each allowed model with its low-cost reasoning shape", async () => {
+		const cases = [
+			{
+				model: "meta/muse-spark-1.3-contributor",
+				reasoning: { effort: "minimal", exclude: true },
+			},
+			{ model: "openai/gpt-5.6-luna", reasoning: { effort: "none", exclude: true } },
+			{ model: "qwen/qwen3.7-flash", reasoning: { max_tokens: 512, exclude: true } },
+		] as const;
+		for (const { model, reasoning } of cases) {
+			fetchMock.mockResolvedValueOnce(upstreamOk({ ...chatPayload("hello"), model }));
+			const response = await handleOpenRouterRequest(post({ message: "hi", model }), env());
+			expect(response.status).toBe(200);
+			const upstream = JSON.parse(
+				String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1]?.body),
+			) as Record<string, unknown>;
+			expect(upstream.model).toBe(model);
+			expect(upstream.max_tokens).toBe(4096);
+			expect(upstream.reasoning).toEqual(reasoning);
+		}
+	});
+
+	it("rejects unsupported models before quota or upstream work", async () => {
+		const { db } = rateLimitDb();
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi", model: "openai/gpt-4o" }),
+			env({ DB: db }),
+		);
+		expect(response.status).toBe(400);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body.error).toBe("model is not supported");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(db.prepare).not.toHaveBeenCalled();
+	});
+
+	it("propagates the selected model through the streaming path", async () => {
+		const cases = [
+			{
+				model: "openai/gpt-5.6-luna",
+				reasoning: { effort: "none" },
+			},
+			{
+				model: "qwen/qwen3.7-flash",
+				reasoning: { max_tokens: 512 },
+			},
+		] as const;
+		for (const { model, reasoning } of cases) {
+			// No "model" in upstream frames: the terminal must fall back to
+			// the requested model, not the Muse default.
+			fetchMock.mockResolvedValueOnce(
+				new Response(
+					`data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n` + `data: [DONE]\n\n`,
+					{ status: 200 },
+				),
+			);
+			const response = await handleOpenRouterRequest(
+				post({ message: "hi", model, stream: true }),
+				env(),
+			);
+			expect(response.status).toBe(200);
+			const upstream = JSON.parse(
+				String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1]?.body),
+			) as Record<string, unknown>;
+			expect(upstream.model).toBe(model);
+			expect(upstream.stream).toBe(true);
+			expect(upstream.reasoning).toEqual(reasoning);
+			expect("exclude" in (upstream.reasoning as Record<string, unknown>)).toBe(false);
+			const events = String(await response.text())
+				.split("\n\n")
+				.filter((frame) => frame.startsWith("data:"))
+				.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
+			expect(events[events.length - 1]).toEqual({ type: "done", model });
+		}
+	});
+});

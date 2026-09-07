@@ -873,6 +873,56 @@ details > .thinking__label {
 	flex: 1;
 }
 
+/* ---------- Model selector ---------- */
+
+.model-selector {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.model-selector__label {
+	font-size: 13px;
+	line-height: 18px;
+	color: var(--text-tertiary);
+	white-space: nowrap;
+}
+
+.model-selector__select {
+	max-width: 200px;
+	height: 36px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: transparent;
+	font-size: 14px;
+	line-height: 20px;
+	font-weight: 500;
+	color: var(--text-primary);
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.model-selector__select:hover {
+	background: var(--surface-hover);
+}
+
+.model-selector__select:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+@media (max-width: 768px) {
+	.model-selector__label {
+		display: none;
+	}
+
+	.model-selector__select {
+		max-width: 140px;
+	}
+}
+
 .main__auth {
 	display: flex;
 	align-items: center;

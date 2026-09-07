@@ -81,8 +81,15 @@ Request (`TurnRequest`):
   fork?: { chatId: string; title: string };      // land on a new pointer; :id untouched
   title?: string;                    // new chat only (`parentId: null` and `:id` absent)
   stream?: boolean;
+  model?: ModelId;                   // allowlisted id; omitted = Muse Spark
 }
 ```
+
+Allowlisted models (`ModelId` in `worker/tree-types.ts`; anything else → `400 "model is not supported"`):
+
+- `meta/muse-spark-1.3-contributor` (default) — Muse Spark
+- `openai/gpt-5.6-luna` — GPT-5.6 Luna
+- `qwen/qwen3.7-flash` — Qwen3.7 Flash
 
 **Send / create** — `parentId` is the current leaf (`null` to create; `:id` must not exist, or must be an empty chat). `title` is used only when creating a new chat (`parentId: null` and `:id` does not exist; whitespace-only becomes `"New chat"`). It is ignored on an existing empty chat, append, redo, and fork (use `fork.title`).
 
@@ -154,7 +161,7 @@ data: {"type":"done","chat":{"id":"t-c1","title":"Turn test","rootId":"t-u1","le
 
 Status codes (JSON unless the stream already opened):
 
-- `400` `"Invalid JSON body"` · `"parentId is invalid"` · `"expectLeaf is invalid"` · `"replyId is invalid"` · `"fork is invalid"` · `"fork.chatId is invalid"` · `"fork.title must be a string"` · `"fork.title must not be empty"` · `"fork.title is too long"` · `"userMessage is invalid"` · `"userMessage.id is invalid"` · `"userMessage content must be a string"` · `"userMessage content must not be empty"` · `"userMessage content is too long"` · `"title must be a string"` · `"title is too long"` · `"stream must be a boolean"` · `"parentId is required for redo"` · `"fork is not allowed when creating a chat"` · `"userMessage.id must differ from replyId"` · `"Parent is not in this chat"` · `"Redo requires a user message parent"` · `"Conversation is too deep"` · `"Tree is too large"` · `"Chat limit reached"`
+- `400` `"Invalid JSON body"` · `"parentId is invalid"` · `"expectLeaf is invalid"` · `"replyId is invalid"` · `"fork is invalid"` · `"fork.chatId is invalid"` · `"fork.title must be a string"` · `"fork.title must not be empty"` · `"fork.title is too long"` · `"userMessage is invalid"` · `"userMessage.id is invalid"` · `"userMessage content must be a string"` · `"userMessage content must not be empty"` · `"userMessage content is too long"` · `"title must be a string"` · `"title is too long"` · `"stream must be a boolean"` · `"model is not supported"` · `"parentId is required for redo"` · `"fork is not allowed when creating a chat"` · `"userMessage.id must differ from replyId"` · `"Parent is not in this chat"` · `"Redo requires a user message parent"` · `"Conversation is too deep"` · `"Tree is too large"` · `"Chat limit reached"`
 - `401` `"Unauthorized"`
 - `404` `"Not found"` · `"Parent not found"`
 - `405` `"Use POST"`
@@ -165,9 +172,9 @@ Status codes (JSON unless the stream already opened):
 
 ### Frontend wiring notes
 
-- Import `ChatSummary`, `ApiMessage`, `TurnRequest`, `TurnResponse`, `TurnStreamEvent` from `worker/tree-types.ts`.
+- Import `ChatSummary`, `ApiMessage`, `TurnRequest`, `TurnResponse`, `TurnStreamEvent`, `ModelId`, `CHAT_MODELS`, `DEFAULT_MODEL` from `worker/tree-types.ts`.
 - Hydrate: `GET /api/chats?summary=1`, then `GET /api/chats/:id` per open pane.
-- Send: `POST /api/chats/:id/turns` with `parentId = leafId`, `expectLeaf = leafId`, mint `userMessage.id` and `replyId` client-side. Set `stream: true`.
+- Send: `POST /api/chats/:id/turns` with `parentId = leafId`, `expectLeaf = leafId`, mint `userMessage.id` and `replyId` client-side. Set `stream: true`. Include the selected `model` (`ModelId`); omit for the Muse Spark default.
 - Redo: same route, `parentId` = the user node above the reply, no `userMessage`.
 - Fork: same as send (or redo) plus `fork: { chatId, title }` when the same chat is open in another pane (or when redoing a reply that is not the leaf).
 - On `409`, reload (`GET /api/chats/:id` or use the returned `chat`) and retry from the fresh `leafId`.
@@ -183,7 +190,7 @@ Unchanged shapes, used by the current UI. Slated for removal once the UI is on `
 
 - `GET /api/chats` — full documents `{ chats: [{ id, title, createdAt, updatedAt, messages: [{ id, role, content, createdAt, reasoning? }] }] }` (pending rows omitted). Non-GET → `405` `"Use GET"`.
 - `PUT /api/chats/:id` — full-document replace, reconciled onto the tree (append / truncate / diverge / in-place edit). Compare-and-swaps the chat's leaf on every reconcile statement: a concurrent `/turns` write returns `409` `"Chat changed, reload"` and writes nothing. `409` `"Chat is generating"` if the leaf is a fresh pending reply; `409` `"Message is shared with another chat and cannot be edited here"` when editing a node another chat shares. Array cap 80 (maps to depth < 80). Does not enforce the per-root 400 cap.
-- `POST /api/openrouter` — `{ message, messages: [{ role, content }], stream? }` → `{ ok, model, message }`, or SSE `{ type: "reasoning" | "content", text }` / `{ type: "done", model }` / `{ type: "error", error }`. Legacy `reasoningDetails` blobs are accepted and dropped. Display-only `reasoning` is never sent upstream.
+- `POST /api/openrouter` — `{ message, messages: [{ role, content }], stream?, model? }` → `{ ok, model, message }`, or SSE `{ type: "reasoning" | "content", text }` / `{ type: "done", model }` / `{ type: "error", error }`. `model` is an optional allowlisted `ModelId` (same three as `/turns`; omitted = Muse Spark). Anything else → `400 "model is not supported"` before quota. Legacy `reasoningDetails` blobs are accepted and dropped. Display-only `reasoning` is never sent upstream.
 
 ### Limits
 

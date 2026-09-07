@@ -1,3 +1,4 @@
+import type { ModelId } from "../../worker/tree-types";
 import type { Role } from "../types";
 
 export type ChatResponse =
@@ -24,12 +25,18 @@ export async function sendChatStream(
 	messages: ChatTurn[],
 	signal: AbortSignal,
 	onUpdate: (update: StreamUpdate) => void,
+	options?: { model?: ModelId },
 ): Promise<StreamResult> {
 	const last = messages[messages.length - 1];
 	const response = await fetch("/api/openrouter", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ message: last?.content ?? "", messages, stream: true }),
+		body: JSON.stringify({
+			message: last?.content ?? "",
+			messages,
+			stream: true,
+			...(options?.model ? { model: options.model } : {}),
+		}),
 		signal,
 	});
 

@@ -28,8 +28,12 @@ Use `localhost`, not `127.0.0.1`.
 
 ## Models
 
-Default model for all OpenRouter chat completions: `meta/muse-spark-1.3-contributor` (Muse Spark 1.3 contributor tier).
+Allowlisted chat models (`ModelId` in `worker/tree-types.ts`; the Worker rejects anything else with 400 before quota):
 
-There is no separate instant/thinking slug. Instant-like replies use `reasoning: { effort: "minimal" }` (shortest pass Muse supports; `none` returns HTTP 400). Keep `max_tokens` at 4096. The non-streaming path adds `exclude: true`; the streaming path omits it so the UI can show thinking live. `POST /api/chats/:id/turns` streams the same reasoning/content deltas but replaces upstream's terminal frame with its own `done` (committed `chat` + root-to-leaf path) after the reply is persisted; persistence runs on a tee inside `ctx.waitUntil`, so a reply that finishes within ~30 s of the disconnect is still committed; a longer one is left pending and abandoned by the next write (the user message survives, quota was spent). Never store or echo `reasoning_details`: plain chat sends no `tools`, so there is no tool-use continuity to preserve, and replaying old thinking only slows later replies. The UI keeps a small display-only `reasoning` string per assistant message (persisted, truncated to 4k, never sent upstream). Accept-and-drop legacy blobs from old clients instead of rejecting them.
+- `meta/muse-spark-1.3-contributor` — Muse Spark, the default for omitted/legacy requests.
+- `openai/gpt-5.6-luna` — GPT-5.6 Luna.
+- `qwen/qwen3.7-flash` — Qwen3.7 Flash.
 
-Do not switch models unless we explicitly ask.
+Per-model low-cost reasoning (`reasoningFor` in `worker/openrouter.ts`; live catalog, Sep 2026): Muse reasoning is mandatory with `minimal` in `supported_efforts`, so `reasoning: { effort: "minimal" }` is the fastest legal setting (`none` returns HTTP 400). Luna lists `none` in `supported_efforts` with reasoning optional, so it sends `reasoning: { effort: "none" }`. Qwen exposes no effort levels but supports `max_tokens`, so it sends `reasoning: { max_tokens: 512 }`. Keep `max_tokens` at 4096. The non-streaming path adds `exclude: true`; the streaming path omits it so the UI can show thinking live. `POST /api/chats/:id/turns` streams the same reasoning/content deltas but replaces upstream's terminal frame with its own `done` (committed `chat` + root-to-leaf path) after the reply is persisted; persistence runs on a tee inside `ctx.waitUntil`, so a reply that finishes within ~30 s of the disconnect is still committed; a longer one is left pending and abandoned by the next write (the user message survives, quota was spent). Never store or echo `reasoning_details`: plain chat sends no `tools`, so there is no tool-use continuity to preserve, and replaying old thinking only slows later replies. The UI keeps a small display-only `reasoning` string per assistant message (persisted, truncated to 4k, never sent upstream). Accept-and-drop legacy blobs from old clients instead of rejecting them.
+
+Do not add or switch models unless we explicitly ask.

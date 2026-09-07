@@ -1,8 +1,8 @@
 /** Body validation for POST /api/chats/:id/turns. Shape only; no DB access. */
-import type { TurnRequest } from "./tree-types.js";
-import { MAX_CONTENT, MAX_TITLE, isId } from "./tree-types.js";
+import type { ModelId, TurnRequest } from "./tree-types.js";
+import { DEFAULT_MODEL, MAX_CONTENT, MAX_TITLE, isId, isModelId } from "./tree-types.js";
 
-export type ParsedTurn = TurnRequest & { stream: boolean };
+export type ParsedTurn = TurnRequest & { stream: boolean; model: ModelId };
 
 export function parseTurnRequest(body: unknown): { ok: true; value: ParsedTurn } | { ok: false; error: string } {
 	if (typeof body !== "object" || body === null) {
@@ -81,6 +81,14 @@ export function parseTurnRequest(body: unknown): { ok: true; value: ParsedTurn }
 		stream = body.stream;
 	}
 
+	let model: ModelId = DEFAULT_MODEL;
+	if ("model" in body && body.model !== undefined) {
+		if (!isModelId(body.model)) {
+			return { ok: false, error: "model is not supported" };
+		}
+		model = body.model;
+	}
+
 	if (!userMessage && body.parentId === null) {
 		return { ok: false, error: "parentId is required for redo" };
 	}
@@ -101,6 +109,7 @@ export function parseTurnRequest(body: unknown): { ok: true; value: ParsedTurn }
 			...(userMessage ? { userMessage } : {}),
 			...(title ? { title } : {}),
 			stream,
+			model,
 		},
 	};
 }

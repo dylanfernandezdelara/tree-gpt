@@ -1,4 +1,5 @@
 import type { Chat, Message } from "../types";
+import { DEFAULT_MODEL, isModelId, type ModelId } from "../../worker/tree-types";
 import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
 /**
@@ -23,6 +24,8 @@ type UiState = {
 	/** Pre-split-screen layout: the one open chat per namespace. Read for migration only. */
 	activeChatId: Record<string, string | null>;
 	layout: Record<string, StoredLayout>;
+	/** Global model preference. Unknown or missing values read as DEFAULT_MODEL. */
+	model: ModelId;
 };
 
 function chatsKey(namespace: string): string {
@@ -69,6 +72,7 @@ function loadUi(): UiState {
 		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : true,
 		activeChatId: active,
 		layout,
+		model: isModelId(record.model) ? record.model : DEFAULT_MODEL,
 	};
 }
 
@@ -78,6 +82,14 @@ export function loadSidebarOpen(): boolean {
 
 export function saveSidebarOpen(open: boolean): void {
 	writeJson(UI_KEY, { ...loadUi(), sidebarOpen: open });
+}
+
+export function loadSelectedModel(): ModelId {
+	return loadUi().model;
+}
+
+export function saveSelectedModel(model: ModelId): void {
+	writeJson(UI_KEY, { ...loadUi(), model });
 }
 
 /**

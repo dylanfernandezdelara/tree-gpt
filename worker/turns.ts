@@ -131,6 +131,7 @@ export async function handleTurnRequest(
 	const opened = await openStreamCompletion(env, history, {
 		sessionId: reserved.rootId,
 		origin: new URL(request.url).origin,
+		model: body.model,
 	});
 	if (!opened.ok) {
 		await abandonTurn(env.DB, user.id, reserved.replyId, plan.fallbackLeaf);
