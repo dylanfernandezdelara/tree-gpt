@@ -1,7 +1,7 @@
 import { getSessionUser } from "./auth.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
-const FREE_MODEL = "openrouter/free";
+const CHAT_MODEL = "meta/muse-spark-1.3-contributor";
 
 const MAX_TURN_CHARS = 8_000;
 const MAX_HISTORY = 50;
@@ -158,7 +158,7 @@ export async function requestCompletion(
 		max_tokens: number;
 		session_id?: string;
 	} = {
-		model: FREE_MODEL,
+		model: CHAT_MODEL,
 		messages,
 		max_tokens: 1024,
 	};
