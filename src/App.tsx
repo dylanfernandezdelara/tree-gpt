@@ -1,23 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoginPage } from "./LoginPage";
-import { ChatThread } from "./components/ChatThread";
-import { Composer } from "./components/Composer";
-import { EmptyState } from "./components/EmptyState";
+import { ChatPane } from "./components/ChatPane";
 import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
+import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
 import { sendChat, type ChatTurn } from "./lib/api";
 import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
-import { placeholderReply } from "./lib/placeholder";
 import {
-	GUEST_NAMESPACE,
-	loadActiveChatId,
+	clearChat,
+	findPane,
+	listPanes,
+	MAX_PANES,
+	removePane,
+	setPaneChat,
+	splitPane,
+	type DropSide,
+	type LayoutNode,
+} from "./lib/layout";
+import {
+	loadLayout,
 	loadLocalChats,
 	loadSidebarOpen,
 	newId,
-	saveActiveChatId,
+	saveLayout,
 	saveLocalChats,
 	saveSidebarOpen,
 	titleFromMessage,
@@ -28,16 +36,18 @@ const SYNC_DEBOUNCE_MS = 500;
 const NO_CHATS: Chat[] = [];
 
 /**
- * The chats currently on screen. `ns` identifies whose they are ("guest" or
- * "user:<id>"); `kind` says where they persist. A store is loaded whenever
- * the signed-in user changes, so chats from one namespace never leak into
- * another.
+ * The chats currently on screen. `ns` identifies whose they are ("user:<id>");
+ * `kind` says where they persist. A store is loaded whenever the signed-in
+ * user changes, so chats from one namespace never leak into another.
+ * `layout` is the split-pane tree and `focusedPaneId` the pane that sidebar
+ * actions target.
  */
 type Store = {
 	ns: string;
 	kind: "local" | "remote";
 	chats: Chat[];
-	activeChatId: string | null;
+	layout: LayoutNode;
+	focusedPaneId: string;
 };
 
 function App() {
@@ -62,9 +72,11 @@ function App() {
 function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
-	const [draft, setDraft] = useState("");
-	const [pendingChatId, setPendingChatId] = useState<string | null>(null);
-	const controllerRef = useRef<AbortController | null>(null);
+	/** Composer text per pane id. */
+	const [drafts, setDrafts] = useState<Record<string, string>>({});
+	/** Chats with a reply in flight (one request per chat; chats run concurrently). */
+	const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
+	const pendingRef = useRef(new Map<string, AbortController>());
 	const syncRef = useRef<RemoteSync | null>(null);
 
 	const namespace = `user:${user.id}`;
@@ -73,53 +85,45 @@ function ChatApp({ user }: { user: AuthUser }) {
 
 	// Load the right chat store whenever the signed-in user changes.
 	useEffect(() => {
-		if (namespace === null) {
-			return;
-		}
 		const ns = namespace;
 		const controller = new AbortController();
-		controllerRef.current?.abort();
+		for (const pending of pendingRef.current.values()) {
+			pending.abort();
+		}
+		pendingRef.current.clear();
 		syncRef.current?.dispose();
 		syncRef.current = null;
 
 		async function load() {
 			let chats: Chat[];
 			let kind: Store["kind"];
-			if (ns === GUEST_NAMESPACE) {
+			const remote = await listChats(controller.signal);
+			if (controller.signal.aborted) {
+				return;
+			}
+			if (remote) {
+				chats = remote;
+				kind = "remote";
+			} else {
+				console.warn(
+					"[treeGPT] /api/chats is not available; keeping this account's chats on this device for now.",
+				);
 				chats = loadLocalChats(ns);
 				kind = "local";
-			} else {
-				const remote = await listChats(controller.signal);
-				if (controller.signal.aborted) {
-					return;
-				}
-				if (remote) {
-					chats = remote;
-					kind = "remote";
-				} else {
-					console.warn(
-						"[treeGPT] /api/chats is not available; keeping this account's chats on this device for now.",
-					);
-					chats = loadLocalChats(ns);
-					kind = "local";
-				}
 			}
 			if (kind === "remote") {
 				syncRef.current = new RemoteSync(chats);
 			}
-			const remembered = loadActiveChatId(ns);
-			setStore({
-				ns,
-				kind,
-				chats,
-				activeChatId: chats.some((c) => c.id === remembered) ? remembered : null,
-			});
+			const layout = loadLayout(ns, new Set(chats.map((chat) => chat.id)));
+			setPendingIds(new Set());
+			setDrafts({});
+			setStore({ ns, kind, chats, layout: layout.root, focusedPaneId: layout.focusedPaneId });
 		}
 		void load();
 		return () => controller.abort();
 	}, [namespace]);
 
-	// Persist: local stores write the chats; remote stores push changes; every store remembers its open chat.
+	// Persist: local stores write the chats; remote stores push changes; every store remembers its layout.
 	useEffect(() => {
 		if (!store) {
 			return;
@@ -129,7 +133,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		} else {
 			syncRef.current?.reconcile(store.chats);
 		}
-		saveActiveChatId(store.ns, store.activeChatId);
+		saveLayout(store.ns, store.layout, store.focusedPaneId);
 	}, [store]);
 
 	useEffect(() => {
@@ -137,23 +141,24 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}, [sidebarOpen]);
 
 	const chats = active?.chats ?? NO_CHATS;
-	const activeChatId = active?.activeChatId ?? null;
+	const layout = active?.layout ?? null;
+	const panes = useMemo(() => (layout ? listPanes(layout) : []), [layout]);
+	const focusedPane = panes.find((pane) => pane.id === active?.focusedPaneId) ?? panes[0] ?? null;
 	const sortedChats = useMemo(
 		() => [...chats].sort((a, b) => b.updatedAt - a.updatedAt),
 		[chats],
 	);
-	const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
+	const chatById = useMemo(() => new Map(chats.map((chat) => [chat.id, chat])), [chats]);
 
-	function updateChats(update: (chats: Chat[]) => Chat[]) {
-		setStore((prev) => (prev ? { ...prev, chats: update(prev.chats) } : prev));
+	function updateStore(update: (prev: Store) => Store) {
+		setStore((prev) => (prev ? update(prev) : prev));
 	}
 
 	function updateChat(id: string, update: (chat: Chat) => Chat) {
-		updateChats((list) => list.map((chat) => (chat.id === id ? update(chat) : chat)));
-	}
-
-	function setActiveChatId(id: string | null) {
-		setStore((prev) => (prev ? { ...prev, activeChatId: id } : prev));
+		updateStore((prev) => ({
+			...prev,
+			chats: prev.chats.map((chat) => (chat.id === id ? update(chat) : chat)),
+		}));
 	}
 
 	function setReply(chatId: string, replyId: string, patch: Partial<Message>) {
@@ -163,92 +168,206 @@ function ChatApp({ user }: { user: AuthUser }) {
 		}));
 	}
 
+	function focusPane(paneId: string) {
+		updateStore((prev) => (prev.focusedPaneId === paneId ? prev : { ...prev, focusedPaneId: paneId }));
+	}
+
+	/** A chat id we can actually show; anything unknown opens as a new chat. */
+	function resolveChatId(prev: Store, chatId: string | null): string | null {
+		return chatId !== null && prev.chats.some((chat) => chat.id === chatId) ? chatId : null;
+	}
+
+	/** Show a chat (or an empty new chat) in a pane and focus it. */
+	function openInPane(paneId: string, chatId: string | null) {
+		updateStore((prev) => ({
+			...prev,
+			layout: setPaneChat(prev.layout, paneId, resolveChatId(prev, chatId)),
+			focusedPaneId: paneId,
+		}));
+	}
+
+	function dropOnPane(paneId: string, side: DropSide, chatId: string | null) {
+		if (side === "center") {
+			openInPane(paneId, chatId);
+			return;
+		}
+		updateStore((prev) => {
+			if (listPanes(prev.layout).length >= MAX_PANES || !findPane(prev.layout, paneId)) {
+				return prev;
+			}
+			const { root, newPaneId } = splitPane(
+				prev.layout,
+				paneId,
+				side,
+				resolveChatId(prev, chatId),
+			);
+			return { ...prev, layout: root, focusedPaneId: newPaneId };
+		});
+	}
+
+	function closePane(paneId: string) {
+		updateStore((prev) => {
+			const root = removePane(prev.layout, paneId);
+			const remaining = listPanes(root);
+			const focusedPaneId = remaining.some((pane) => pane.id === prev.focusedPaneId)
+				? prev.focusedPaneId
+				: remaining[0].id;
+			return { ...prev, layout: root, focusedPaneId };
+		});
+		setDrafts((prev) => {
+			if (!(paneId in prev)) {
+				return prev;
+			}
+			const next = { ...prev };
+			delete next[paneId];
+			return next;
+		});
+	}
+
+	function setDraft(paneId: string, value: string) {
+		setDrafts((prev) => ({ ...prev, [paneId]: value }));
+	}
+
 	async function request(chatId: string, replyId: string, history: ChatTurn[]) {
-		controllerRef.current?.abort();
+		pendingRef.current.get(chatId)?.abort();
 		const controller = new AbortController();
-		controllerRef.current = controller;
-		setPendingChatId(chatId);
+		pendingRef.current.set(chatId, controller);
+		setPendingIds((prev) => new Set(prev).add(chatId));
 		try {
-			const content = await fetchReply(history, controller.signal);
-			updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
-			setReply(chatId, replyId, { content, pending: false, error: false });
+			const result = await sendChat(history, controller.signal);
+			if (result.ok) {
+				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
+				setReply(chatId, replyId, { content: result.message, pending: false, error: false });
+			} else {
+				const content = result.details ? `${result.error}: ${result.details}` : result.error;
+				setReply(chatId, replyId, { content, pending: false, error: true });
+			}
 		} catch {
-			// Only an abort gets here: drop the placeholder and keep the user's message.
-			updateChat(chatId, (chat) => ({
-				...chat,
-				messages: chat.messages.filter((m) => m.id !== replyId),
-			}));
+			if (controller.signal.aborted) {
+				// Stopped by the reader: drop the placeholder, keep their message.
+				updateChat(chatId, (chat) => ({
+					...chat,
+					messages: chat.messages.filter((m) => m.id !== replyId),
+				}));
+			} else {
+				setReply(chatId, replyId, {
+					content: "Couldn't reach the server. Check your connection and try again.",
+					pending: false,
+					error: true,
+				});
+			}
 		} finally {
-			if (controllerRef.current === controller) {
-				controllerRef.current = null;
-				setPendingChatId(null);
+			if (pendingRef.current.get(chatId) === controller) {
+				pendingRef.current.delete(chatId);
+				setPendingIds((prev) => {
+					const next = new Set(prev);
+					next.delete(chatId);
+					return next;
+				});
 			}
 		}
 	}
 
-	function send() {
-		const content = draft.trim();
-		if (!active || !content || pendingChatId !== null) {
+	function send(paneId: string) {
+		if (!active) {
 			return;
 		}
-		const now = Date.now();
-		const userMessage: Message = { id: newId(), role: "user", content, createdAt: now };
-		const reply: Message = {
-			id: newId(),
-			role: "assistant",
-			content: "",
-			createdAt: now,
-			pending: true,
-		};
-		setDraft("");
+		const pane = findPane(active.layout, paneId);
+		const content = (drafts[paneId] ?? "").trim();
+		if (!pane || !content) {
+			return;
+		}
+		const chat = pane.chatId ? (chatById.get(pane.chatId) ?? null) : null;
+		if (chat && pendingRef.current.has(chat.id)) {
+			return;
+		}
+		// The same chat open in another pane: branch instead of appending, so the
+		// other panes keep the original conversation.
+		const shared =
+			chat !== null &&
+			listPanes(active.layout).filter((other) => other.chatId === chat.id).length > 1;
+		const { now, userMessage, reply } = newExchange(content);
+		setDraft(paneId, "");
 
-		if (activeChat) {
-			const history: ChatTurn[] = [...toTurns(activeChat.messages), { role: "user", content }];
-			updateChat(activeChat.id, (chat) => ({
-				...chat,
+		if (chat && shared) {
+			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
+			const branched: Chat = {
+				id: newId(),
+				title: titleFromMessage(content),
+				messages: [...copyMessages(chat.messages), userMessage, reply],
+				createdAt: now,
 				updatedAt: now,
-				messages: [...chat.messages, userMessage, reply],
+			};
+			updateStore((prev) => ({
+				...prev,
+				chats: [branched, ...prev.chats],
+				layout: setPaneChat(prev.layout, paneId, branched.id),
 			}));
-			void request(activeChat.id, reply.id, history);
+			void request(branched.id, reply.id, history);
+		} else if (chat) {
+			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
+			updateChat(chat.id, (current) => ({
+				...current,
+				updatedAt: now,
+				messages: [...current.messages, userMessage, reply],
+			}));
+			void request(chat.id, reply.id, history);
 		} else {
-			const chat: Chat = {
+			const created: Chat = {
 				id: newId(),
 				title: titleFromMessage(content),
 				messages: [userMessage, reply],
 				createdAt: now,
 				updatedAt: now,
 			};
-			setStore((prev) =>
-				prev ? { ...prev, chats: [chat, ...prev.chats], activeChatId: chat.id } : prev,
-			);
-			void request(chat.id, reply.id, [{ role: "user", content }]);
+			updateStore((prev) => ({
+				...prev,
+				chats: [created, ...prev.chats],
+				layout: setPaneChat(prev.layout, paneId, created.id),
+			}));
+			void request(created.id, reply.id, [{ role: "user", content }]);
 		}
 	}
 
 	/** Re-request an assistant reply using the conversation up to that point. */
-	function redo(messageId: string) {
-		if (!activeChat || pendingChatId !== null) {
+	function redo(paneId: string, messageId: string) {
+		if (!active) {
 			return;
 		}
-		const index = activeChat.messages.findIndex((m) => m.id === messageId);
+		const pane = findPane(active.layout, paneId);
+		const chat = pane?.chatId ? (chatById.get(pane.chatId) ?? null) : null;
+		if (!chat || pendingRef.current.has(chat.id)) {
+			return;
+		}
+		const index = chat.messages.findIndex((m) => m.id === messageId);
 		if (index < 0) {
 			return;
 		}
-		const history = toTurns(activeChat.messages.slice(0, index));
+		const history = toTurns(chat.messages.slice(0, index));
 		if (history.length === 0) {
 			return;
 		}
-		setReply(activeChat.id, messageId, { content: "", pending: true, error: false });
-		void request(activeChat.id, messageId, history);
+		setReply(chat.id, messageId, { content: "", pending: true, error: false });
+		void request(chat.id, messageId, history);
 	}
 
-	function stop() {
-		controllerRef.current?.abort();
+	function stop(paneId: string) {
+		const pane = active ? findPane(active.layout, paneId) : null;
+		if (pane?.chatId) {
+			pendingRef.current.get(pane.chatId)?.abort();
+		}
 	}
 
 	function newChat() {
-		setActiveChatId(null);
-		setDraft("");
+		if (focusedPane) {
+			openInPane(focusedPane.id, null);
+		}
+	}
+
+	function selectChat(chatId: string) {
+		if (focusedPane) {
+			openInPane(focusedPane.id, chatId);
+		}
 	}
 
 	async function logOut() {
@@ -264,40 +383,23 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	function deleteChat(id: string) {
-		if (pendingChatId === id) {
-			controllerRef.current?.abort();
-		}
-		setStore((prev) =>
-			prev
-				? {
-						...prev,
-						chats: prev.chats.filter((chat) => chat.id !== id),
-						activeChatId: prev.activeChatId === id ? null : prev.activeChatId,
-					}
-				: prev,
-		);
+		pendingRef.current.get(id)?.abort();
+		updateStore((prev) => ({
+			...prev,
+			chats: prev.chats.filter((chat) => chat.id !== id),
+			layout: clearChat(prev.layout, id),
+		}));
 	}
-
-	const composer = (
-		<Composer
-			value={draft}
-			onChange={setDraft}
-			onSend={send}
-			onStop={stop}
-			streaming={pendingChatId !== null && pendingChatId === activeChatId}
-			busy={pendingChatId !== null || active === null}
-		/>
-	);
 
 	return (
 		<div className="app">
 			<Sidebar
 				chats={sortedChats}
-				activeChatId={activeChatId}
+				activeChatId={focusedPane?.chatId ?? null}
 				open={sidebarOpen}
 				onToggle={() => setSidebarOpen((open) => !open)}
 				onNewChat={newChat}
-				onSelect={setActiveChatId}
+				onSelect={selectChat}
 				onRename={renameChat}
 				onDelete={deleteChat}
 				user={user}
@@ -320,37 +422,59 @@ function ChatApp({ user }: { user: AuthUser }) {
 						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
 					)}
 				</header>
-				{activeChat && activeChat.messages.length > 0 ? (
-					<ChatThread chat={activeChat} onRedo={redo} composer={composer} />
-				) : (
-					<EmptyState>{composer}</EmptyState>
-				)}
+				<div className="main__body">
+					{layout ? (
+						<PaneLayout
+							root={layout}
+							renderPane={(pane) => {
+								const chat = pane.chatId ? (chatById.get(pane.chatId) ?? null) : null;
+								const streaming = chat ? pendingIds.has(chat.id) : false;
+								return (
+									<ChatPane
+										key={pane.id}
+										pane={pane}
+										chat={chat}
+										focused={pane.id === focusedPane?.id}
+										multi={panes.length > 1}
+										draft={drafts[pane.id] ?? ""}
+										streaming={streaming}
+										busy={streaming}
+										onFocus={() => focusPane(pane.id)}
+										onClose={() => closePane(pane.id)}
+										onDraftChange={(value) => setDraft(pane.id, value)}
+										onSend={() => send(pane.id)}
+										onStop={() => stop(pane.id)}
+										onRedo={(messageId) => redo(pane.id, messageId)}
+										onDrop={(side, chatId) => dropOnPane(pane.id, side, chatId)}
+									/>
+								);
+							}}
+						/>
+					) : null}
+				</div>
 			</main>
 		</div>
 	);
 }
 
+/** A user message plus the placeholder for its reply. */
+function newExchange(content: string): { now: number; userMessage: Message; reply: Message } {
+	const now = Date.now();
+	return {
+		now,
+		userMessage: { id: newId(), role: "user", content, createdAt: now },
+		reply: { id: newId(), role: "assistant", content: "", createdAt: now, pending: true },
+	};
+}
+
 /**
- * Ask the backend for a reply. TEMPORARY: while the backend is not wired up,
- * a failed call is replaced with placeholder text so the UI can be exercised.
- * Aborts still propagate.
+ * Messages copied into a branched chat: finished turns only, with fresh ids
+ * because message ids are unique across every chat on the backend.
  */
-async function fetchReply(history: ChatTurn[], signal: AbortSignal): Promise<string> {
-	let failure: string;
-	try {
-		const result = await sendChat(history, signal);
-		if (result.ok) {
-			return result.message;
-		}
-		failure = result.details ? `${result.error}: ${result.details}` : result.error;
-	} catch (error) {
-		if (signal.aborted) {
-			throw error;
-		}
-		failure = error instanceof Error ? error.message : String(error);
-	}
-	console.warn(`[treeGPT] /api/openrouter failed (${failure}); showing a placeholder reply.`);
-	return placeholderReply(history, signal);
+function copyMessages(messages: Message[]): Message[] {
+	return messages
+		.filter((m) => !m.pending && !m.error)
+		.map((m) => ({ id: newId(), role: m.role, content: m.content, createdAt: m.createdAt }));
 }
 
 /** Conversation turns to send upstream: finished messages only. */

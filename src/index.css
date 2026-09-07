@@ -284,6 +284,133 @@ button {
 	padding: 8px;
 }
 
+/* ---------- Split panes ---------- */
+
+.main__body {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.split {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+.split--row {
+	flex-direction: row;
+}
+
+.split--column {
+	flex-direction: column;
+}
+
+.split__cell {
+	position: relative;
+	display: flex;
+	flex: 1 1 0;
+	min-width: 0;
+	min-height: 0;
+}
+
+.split--row > .split__cell + .split__cell {
+	border-left: 1px solid var(--border-light);
+}
+
+.split--column > .split__cell + .split__cell {
+	border-top: 1px solid var(--border-light);
+}
+
+.pane {
+	position: relative;
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+	container-type: inline-size;
+}
+
+.pane__header {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 8px;
+	height: 40px;
+	padding: 0 8px 0 16px;
+	font-size: 14px;
+	line-height: 20px;
+	color: var(--text-secondary);
+}
+
+.pane--focused .pane__header {
+	color: var(--text-primary);
+}
+
+.pane__title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.pane__close {
+	width: 28px;
+	height: 28px;
+}
+
+/* Drop preview: slides between zones while a chat is dragged over the pane. */
+.pane__drop {
+	position: absolute;
+	inset: 8px;
+	z-index: 5;
+	border: 2px solid rgba(58, 131, 247, 0.45);
+	border-radius: 12px;
+	background: rgba(58, 131, 247, 0.1);
+	opacity: 0;
+	pointer-events: none;
+	transition:
+		inset 0.15s ease,
+		opacity 0.15s ease;
+}
+
+.pane__drop--visible {
+	opacity: 1;
+}
+
+.pane__drop--left {
+	inset: 8px 50% 8px 8px;
+}
+
+.pane__drop--right {
+	inset: 8px 8px 8px 50%;
+}
+
+.pane__drop--top {
+	inset: 8px 8px 50% 8px;
+}
+
+.pane__drop--bottom {
+	inset: 50% 8px 8px 8px;
+}
+
+.pane__drop--center {
+	inset: 8px;
+}
+
+/* Narrow panes drop the wide gutters. */
+@container (max-width: 720px) {
+	.thread,
+	.composer-float,
+	.empty {
+		padding-left: 16px;
+		padding-right: 16px;
+	}
+}
+
 /* The scroll region; the composer floats over its bottom edge. */
 .thread-area {
 	position: relative;
@@ -300,14 +427,22 @@ button {
 }
 
 .thread__inner {
+	display: flex;
+	flex-direction: column;
+	min-height: 100%;
 	max-width: var(--thread-width);
 	margin: 0 auto;
 	padding: 12px 0 calc(var(--composer-inset) + 24px);
 }
 
-/* Closes every chat; scrolls with the messages like any other content. */
+/*
+ * Closes every chat; scrolls with the messages like any other content.
+ * `margin-top: auto` pins it just above the composer while the conversation is
+ * short; the padding keeps the same gap once the messages fill the pane.
+ */
 .thread__disclaimer {
-	margin: 24px 0 0;
+	margin: auto 0 0;
+	padding-top: 24px;
 	font-size: 12px;
 	line-height: 16px;
 	color: var(--text-tertiary);

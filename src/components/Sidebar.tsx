@@ -5,6 +5,7 @@ import {
 	type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { AuthUser } from "../lib/auth-client";
+import { writeDragPayload } from "../lib/layout";
 import type { Chat } from "../types";
 import { IconButton } from "./IconButton";
 import { ComposeIcon, MoreIcon, PencilIcon, SidebarIcon, TrashIcon } from "./Icons";
@@ -50,6 +51,10 @@ export function Sidebar({
 						type="button"
 						className={`sidebar__row${activeChatId === null ? " sidebar__row--active" : ""}`}
 						onClick={onNewChat}
+						draggable
+						onDragStart={(event) =>
+							writeDragPayload(event.dataTransfer, { chatId: null }, "New chat")
+						}
 					>
 						<ComposeIcon />
 						<span>New chat</span>
@@ -169,6 +174,10 @@ function ChatRow({ chat, active, onSelect, onRename, onDelete }: RowProps) {
 					onClick={onSelect}
 					title={chat.title}
 					aria-current={active ? "page" : undefined}
+					draggable
+					onDragStart={(event) =>
+						writeDragPayload(event.dataTransfer, { chatId: chat.id }, chat.title)
+					}
 				>
 					{chat.title}
 				</button>

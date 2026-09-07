@@ -27,13 +27,44 @@ export async function sendChat(
 		signal,
 	});
 
-	let data: unknown;
+	let body: unknown = null;
 	try {
-		data = await response.json();
+		body = await response.json();
 	} catch {
-		return { ok: false, error: `Server returned ${response.status} with no JSON body` };
+		// Some failures (proxies, gateways) answer without a JSON body.
 	}
-	return parseChatResponse(data);
+	const parsed = body === null ? null : parseChatResponse(body);
+	if (parsed?.ok) {
+		return parsed;
+	}
+
+	// Known statuses get a message that says what to do next; anything else
+	// falls back to whatever the Worker reported.
+	if (response.status === 401) {
+		return { ok: false, error: "Your session expired. Reload the page to sign in again." };
+	}
+	if (response.status === 429) {
+		return { ok: false, error: rateLimitMessage(response.headers.get("Retry-After")) };
+	}
+	if (parsed) {
+		return parsed;
+	}
+	return { ok: false, error: `The server returned ${response.status}.` };
+}
+
+/** The Worker caps generations per hour and sends Retry-After in seconds. */
+function rateLimitMessage(retryAfter: string | null): string {
+	const seconds = Number(retryAfter);
+	if (!Number.isFinite(seconds) || seconds <= 0) {
+		return "You've reached the hourly message limit. Try again later.";
+	}
+	const minutes = Math.ceil(seconds / 60);
+	if (minutes >= 60) {
+		return "You've reached the hourly message limit. Try again in about an hour.";
+	}
+	return `You've reached the hourly message limit. Try again in ${minutes} minute${
+		minutes === 1 ? "" : "s"
+	}.`;
 }
 
 export function parseChatResponse(data: unknown): ChatResponse {

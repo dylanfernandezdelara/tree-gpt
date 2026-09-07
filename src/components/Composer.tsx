@@ -12,9 +12,19 @@ type Props = {
 	streaming: boolean;
 	/** A reply is loading somewhere: sending is blocked. */
 	busy: boolean;
+	/** Focus the text field on mount (only the focused pane should). */
+	autoFocus?: boolean;
 };
 
-export function Composer({ value, onChange, onSend, onStop, streaming, busy }: Props) {
+export function Composer({
+	value,
+	onChange,
+	onSend,
+	onStop,
+	streaming,
+	busy,
+	autoFocus = false,
+}: Props) {
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const canSend = value.trim() !== "" && !busy;
 
@@ -61,7 +71,7 @@ export function Composer({ value, onChange, onSend, onStop, streaming, busy }: P
 				value={value}
 				onChange={(event) => onChange(event.target.value)}
 				onKeyDown={handleKeyDown}
-				autoFocus
+				autoFocus={autoFocus}
 				autoComplete="off"
 			/>
 			{streaming ? (

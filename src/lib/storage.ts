@@ -1,4 +1,5 @@
 import type { Chat, Message } from "../types";
+import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
 /**
  * Browser-side persistence.
@@ -15,9 +16,13 @@ const UI_KEY = "treegpt.ui.v1";
 const LEGACY_KEY = "treegpt.state.v1";
 const TITLE_MAX = 40;
 
+type StoredLayout = { root: unknown; focusedPaneId: string };
+
 type UiState = {
 	sidebarOpen: boolean;
+	/** Pre-split-screen layout: the one open chat per namespace. Read for migration only. */
 	activeChatId: Record<string, string | null>;
+	layout: Record<string, StoredLayout>;
 };
 
 function chatsKey(namespace: string): string {
@@ -51,9 +56,19 @@ function loadUi(): UiState {
 			active[ns] = typeof id === "string" ? id : null;
 		}
 	}
+	const layout: Record<string, StoredLayout> = {};
+	if (typeof record.layout === "object" && record.layout !== null) {
+		for (const [ns, saved] of Object.entries(record.layout as Record<string, unknown>)) {
+			if (typeof saved === "object" && saved !== null && "root" in saved) {
+				const focused = (saved as Record<string, unknown>).focusedPaneId;
+				layout[ns] = { root: saved.root, focusedPaneId: typeof focused === "string" ? focused : "" };
+			}
+		}
+	}
 	return {
 		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : true,
 		activeChatId: active,
+		layout,
 	};
 }
 
@@ -65,13 +80,32 @@ export function saveSidebarOpen(open: boolean): void {
 	writeJson(UI_KEY, { ...loadUi(), sidebarOpen: open });
 }
 
-export function loadActiveChatId(namespace: string): string | null {
-	return loadUi().activeChatId[namespace] ?? null;
+/**
+ * The pane layout for a namespace. Falls back to a single pane holding the
+ * chat that was open before split screens existed, or an empty pane.
+ */
+export function loadLayout(
+	namespace: string,
+	chatIds: ReadonlySet<string>,
+): { root: LayoutNode; focusedPaneId: string } {
+	const ui = loadUi();
+	const saved = ui.layout[namespace];
+	let root = saved ? validateLayout(saved.root, chatIds) : null;
+	if (!root) {
+		const legacy = ui.activeChatId[namespace];
+		root = createPane(legacy && chatIds.has(legacy) ? legacy : null);
+	}
+	const panes = listPanes(root);
+	const focusedPaneId =
+		saved && panes.some((pane) => pane.id === saved.focusedPaneId)
+			? saved.focusedPaneId
+			: panes[0].id;
+	return { root, focusedPaneId };
 }
 
-export function saveActiveChatId(namespace: string, id: string | null): void {
+export function saveLayout(namespace: string, root: LayoutNode, focusedPaneId: string): void {
 	const ui = loadUi();
-	writeJson(UI_KEY, { ...ui, activeChatId: { ...ui.activeChatId, [namespace]: id } });
+	writeJson(UI_KEY, { ...ui, layout: { ...ui.layout, [namespace]: { root, focusedPaneId } } });
 }
 
 export function loadLocalChats(namespace: string): Chat[] {
