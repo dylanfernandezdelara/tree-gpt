@@ -23,4 +23,6 @@ Use `localhost`, not `127.0.0.1`.
 
 Default model for all OpenRouter chat completions: `meta/muse-spark-1.3-contributor` (Muse Spark 1.3 contributor tier).
 
+Send `reasoning: { effort: "medium" }` and a large enough `max_tokens` (4096). Preserve each assistant turn's `reasoning_details` unmodified on later calls.
+
 Do not switch models unless we explicitly ask.

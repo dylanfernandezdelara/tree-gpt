@@ -1,4 +1,4 @@
-import type { Chat, Message } from "../types";
+import type { Chat, Message, ReasoningDetails } from "../types";
 import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
 /**
@@ -143,12 +143,46 @@ export function isMessage(value: unknown): value is Message {
 		return false;
 	}
 	const m = value as Record<string, unknown>;
-	return (
-		typeof m.id === "string" &&
-		(m.role === "user" || m.role === "assistant") &&
-		typeof m.content === "string" &&
-		typeof m.createdAt === "number"
-	);
+	if (
+		typeof m.id !== "string" ||
+		(m.role !== "user" && m.role !== "assistant") ||
+		typeof m.content !== "string" ||
+		typeof m.createdAt !== "number"
+	) {
+		return false;
+	}
+	if (m.reasoningDetails === undefined) {
+		return true;
+	}
+	return m.role === "assistant" && asReasoningDetails(m.reasoningDetails) !== undefined;
+}
+
+export function asReasoningDetails(value: unknown): ReasoningDetails | undefined {
+	if (!Array.isArray(value) || value.length === 0) {
+		return undefined;
+	}
+	const details: Record<string, unknown>[] = [];
+	for (const item of value) {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) {
+			return undefined;
+		}
+		details.push({ ...item });
+	}
+	return details;
+}
+
+export function persistableFields(message: Message): Pick<
+	Message,
+	"role" | "content" | "createdAt" | "reasoningDetails"
+> {
+	const reasoningDetails =
+		message.role === "assistant" ? asReasoningDetails(message.reasoningDetails) : undefined;
+	return {
+		role: message.role,
+		content: message.content,
+		createdAt: message.createdAt,
+		...(reasoningDetails ? { reasoningDetails } : {}),
+	};
 }
 
 export function isChat(value: unknown): value is Chat {
@@ -178,7 +212,7 @@ export function dropTransient(chat: Chat): Chat {
 		updatedAt: chat.updatedAt,
 		messages: chat.messages
 			.filter((m) => !m.pending && !m.error)
-			.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.createdAt })),
+			.map((m) => ({ id: m.id, ...persistableFields(m) })),
 	};
 }
 

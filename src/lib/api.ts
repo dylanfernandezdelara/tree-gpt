@@ -1,10 +1,11 @@
-import type { Role } from "../types";
+import type { ReasoningDetails, Role } from "../types";
+import { asReasoningDetails } from "./storage";
 
 export type ChatResponse =
-	| { ok: true; model: string; message: string }
+	| { ok: true; model: string; message: string; reasoningDetails?: ReasoningDetails }
 	| { ok: false; error: string; details?: string };
 
-export type ChatTurn = { role: Role; content: string };
+export type ChatTurn = { role: Role; content: string; reasoningDetails?: ReasoningDetails };
 
 /**
  * POST /api/openrouter
@@ -74,7 +75,15 @@ export function parseChatResponse(data: unknown): ChatResponse {
 
 	if (data.ok === true && "model" in data && "message" in data) {
 		if (typeof data.model === "string" && typeof data.message === "string") {
-			return { ok: true, model: data.model, message: data.message };
+			const reasoningDetails = asReasoningDetails(
+				"reasoningDetails" in data ? data.reasoningDetails : undefined,
+			);
+			return {
+				ok: true,
+				model: data.model,
+				message: data.message,
+				...(reasoningDetails ? { reasoningDetails } : {}),
+			};
 		}
 	}
 

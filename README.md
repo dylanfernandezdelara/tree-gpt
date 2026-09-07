@@ -19,7 +19,7 @@ Deploy with `npm run db:migrate:remote` and `npm run deploy`. In production set 
 
 All `/api/openrouter` and `/api/chats` routes require the Better Auth session cookie (`401` without one).
 
-- `POST /api/openrouter` — `{ message, messages }` → `{ ok, model, message }` or `{ ok: false, error }`
+- `POST /api/openrouter` — `{ message, messages: [{ role, content, reasoningDetails? }] }` → `{ ok, model, message, reasoningDetails? }` or `{ ok: false, error }`
 - `GET /api/chats` → `{ chats }`, `PUT /api/chats/:id` (full replace), `DELETE /api/chats/:id`
 
 Shapes mirror the types in `worker/openrouter.ts` (`CompletionMessage`) and `worker/chats.ts` (`ApiChat`/`ApiMessage`), which are the source of truth. Signed-in chats persist per user; guests keep chats in the browser.

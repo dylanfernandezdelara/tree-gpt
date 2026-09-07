@@ -1,4 +1,10 @@
 import { getSessionUser } from "./auth.js";
+import {
+	optionalReasoning,
+	parseReasoningDetails,
+	reasoningDetailsSize,
+	type ReasoningDetails,
+} from "./reasoning.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const CHAT_MODEL = "meta/muse-spark-1.3-contributor";
@@ -18,11 +24,13 @@ export type CompletionRole = "user" | "assistant";
 export type CompletionMessage = {
 	role: CompletionRole;
 	content: string;
+	reasoningDetails?: ReasoningDetails;
 };
 
 export type Completion = {
 	model: string;
 	content: string;
+	reasoningDetails?: ReasoningDetails;
 };
 
 export type CompletionFailure = {
@@ -89,6 +97,7 @@ export async function handleOpenRouterRequest(
 		ok: true,
 		model: completion.value.model,
 		message: completion.value.content,
+		reasoningDetails: completion.value.reasoningDetails,
 	});
 }
 
@@ -154,13 +163,17 @@ export async function requestCompletion(
 
 	const body: {
 		model: string;
-		messages: readonly CompletionMessage[];
+		messages: OpenRouterMessage[];
 		max_tokens: number;
+		reasoning: { effort: "medium" };
 		session_id?: string;
 	} = {
 		model: CHAT_MODEL,
-		messages,
-		max_tokens: 1024,
+		messages: toOpenRouterMessages(messages),
+		// Muse Spark spends most of max_tokens on hidden reasoning. 1024 often
+		// finishes with content: null and finish_reason "length".
+		max_tokens: 4096,
+		reasoning: { effort: "medium" },
 	};
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
@@ -200,8 +213,20 @@ export async function requestCompletion(
 			},
 		};
 	}
+	if (!parsed.completion.content.trim()) {
+		return {
+			ok: false,
+			error: {
+				status: 502,
+				message: "OpenRouter returned an empty reply",
+				details: parsed.finishReason
+					? `finish_reason=${parsed.finishReason}`
+					: undefined,
+			},
+		};
+	}
 
-	return { ok: true, value: parsed };
+	return { ok: true, value: parsed.completion };
 }
 
 function parseCompletionRequest(
@@ -266,7 +291,16 @@ function parseMessages(
 			return { ok: false, error: "messages content is too long" };
 		}
 
-		parsed.push({ role: item.role, content });
+		const reasoning = parseAssistantReasoning(item.role, item);
+		if (!reasoning.ok) {
+			return reasoning;
+		}
+
+		parsed.push({
+			role: item.role,
+			content,
+			...optionalReasoning(item.role, reasoning.value),
+		});
 	}
 
 	return { ok: true, messages: capHistory(parsed) };
@@ -283,7 +317,7 @@ function capHistory(messages: CompletionMessage[]): CompletionMessage[] {
 		if (!next) {
 			break;
 		}
-		total += next.content.length;
+		total += next.content.length + reasoningDetailsSize(next.reasoningDetails);
 		if (total > MAX_HISTORY_CHARS) {
 			break;
 		}
@@ -297,7 +331,27 @@ function isRole(value: unknown): value is CompletionRole {
 	return value === "user" || value === "assistant";
 }
 
-function parseCompletion(payload: unknown): Completion | null {
+type ParsedUpstream = {
+	completion: Completion;
+	finishReason?: string;
+};
+
+function parseAssistantReasoning(
+	role: CompletionRole,
+	item: object,
+): { ok: true; value?: ReasoningDetails } | { ok: false; error: string } {
+	const raw = "reasoningDetails" in item ? item.reasoningDetails : undefined;
+	const parsed = parseReasoningDetails(raw);
+	if (!parsed.ok) {
+		return parsed;
+	}
+	if (role !== "assistant" && parsed.value) {
+		return { ok: false, error: "reasoningDetails is only valid on assistant messages" };
+	}
+	return parsed;
+}
+
+function parseCompletion(payload: unknown): ParsedUpstream | null {
 	if (typeof payload !== "object" || payload === null) {
 		return null;
 	}
@@ -320,9 +374,83 @@ function parseCompletion(payload: unknown): Completion | null {
 		return null;
 	}
 
-	if (!("content" in message) || typeof message.content !== "string") {
+	const content = "content" in message ? messageText(message.content) : null;
+	if (content === null) {
 		return null;
 	}
 
-	return { model: payload.model, content: message.content };
+	const finishReason =
+		"finish_reason" in first && typeof first.finish_reason === "string"
+			? first.finish_reason
+			: undefined;
+
+	const rawDetails = "reasoning_details" in message ? message.reasoning_details : undefined;
+	if (rawDetails !== undefined && rawDetails !== null) {
+		const details = parseReasoningDetails(rawDetails);
+		if (!details.ok) {
+			return null;
+		}
+		return {
+			completion: {
+				model: payload.model,
+				content,
+				...optionalReasoning("assistant", details.value),
+			},
+			finishReason,
+		};
+	}
+
+	return {
+		completion: { model: payload.model, content },
+		finishReason,
+	};
+}
+
+type OpenRouterMessage = {
+	role: CompletionRole;
+	content: string;
+	reasoning_details?: ReasoningDetails;
+};
+
+function toOpenRouterMessages(messages: readonly CompletionMessage[]): OpenRouterMessage[] {
+	return messages.map((message) => {
+		const next: OpenRouterMessage = { role: message.role, content: message.content };
+		if (message.role === "assistant" && message.reasoningDetails) {
+			next.reasoning_details = message.reasoningDetails;
+		}
+		return next;
+	});
+}
+
+/**
+ * Muse Spark returns content: null when reasoning consumes the token budget.
+ * Some models also return content as an array of text parts.
+ */
+function messageText(content: unknown): string | null {
+	if (typeof content === "string") {
+		return content;
+	}
+	if (content === null || content === undefined) {
+		return "";
+	}
+	if (!Array.isArray(content)) {
+		return null;
+	}
+
+	const parts: string[] = [];
+	for (const part of content) {
+		if (typeof part === "string") {
+			parts.push(part);
+			continue;
+		}
+		if (
+			typeof part === "object" &&
+			part !== null &&
+			"text" in part &&
+			typeof part.text === "string"
+		) {
+			parts.push(part.text);
+		}
+	}
+	return parts.join("");
 }

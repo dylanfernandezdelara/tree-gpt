@@ -25,6 +25,7 @@ import {
 	loadLocalChats,
 	loadSidebarOpen,
 	newId,
+	persistableFields,
 	saveLayout,
 	saveLocalChats,
 	saveSidebarOpen,
@@ -237,7 +238,12 @@ function ChatApp({ user }: { user: AuthUser }) {
 			const result = await sendChat(history, controller.signal);
 			if (result.ok) {
 				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
-				setReply(chatId, replyId, { content: result.message, pending: false, error: false });
+				setReply(chatId, replyId, {
+					content: result.message,
+					pending: false,
+					error: false,
+					reasoningDetails: result.reasoningDetails,
+				});
 			} else {
 				const content = result.details ? `${result.error}: ${result.details}` : result.error;
 				setReply(chatId, replyId, { content, pending: false, error: true });
@@ -347,7 +353,12 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (history.length === 0) {
 			return;
 		}
-		setReply(chat.id, messageId, { content: "", pending: true, error: false });
+		setReply(chat.id, messageId, {
+			content: "",
+			pending: true,
+			error: false,
+			reasoningDetails: undefined,
+		});
 		void request(chat.id, messageId, history);
 	}
 
@@ -474,14 +485,19 @@ function newExchange(content: string): { now: number; userMessage: Message; repl
 function copyMessages(messages: Message[]): Message[] {
 	return messages
 		.filter((m) => !m.pending && !m.error)
-		.map((m) => ({ id: newId(), role: m.role, content: m.content, createdAt: m.createdAt }));
+		.map((m) => ({ id: newId(), ...persistableFields(m) }));
 }
 
 /** Conversation turns to send upstream: finished messages only. */
 function toTurns(messages: Message[]): ChatTurn[] {
-	return messages
-		.filter((m) => !m.pending && !m.error)
-		.map((m) => ({ role: m.role, content: m.content }));
+	return messages.filter((m) => !m.pending && !m.error).map((m) => {
+		const persisted = persistableFields(m);
+		return {
+			role: persisted.role,
+			content: persisted.content,
+			...(persisted.reasoningDetails ? { reasoningDetails: persisted.reasoningDetails } : {}),
+		};
+	});
 }
 
 /**
