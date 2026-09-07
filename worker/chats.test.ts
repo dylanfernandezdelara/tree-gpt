@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser } from "./auth.js";
 import { handleChatsRequest } from "./chats.js";
-import { isShared, loadAllPaths } from "./tree.js";
+import { gcRoot, isShared, loadAllPaths } from "./tree.js";
 import { MAX_CHATS, PENDING_TIMEOUT_MS, type ApiChat, type MessageRow } from "./tree-types.js";
 
 vi.mock("./auth.js", () => ({
@@ -16,6 +16,9 @@ vi.mock("./tree.js", async (importOriginal) => {
 		loadAllPaths: vi.fn(async () => []),
 		isShared: vi.fn(async () => false),
 		loadPath: vi.fn(async () => []),
+		gcRoot: vi.fn((db: D1Database, userId: string, rootId: string) =>
+			actual.gcRoot(db, userId, rootId),
+		),
 	};
 });
 
@@ -24,9 +27,12 @@ type RecordedStatement = { sql: string; params: unknown[] };
 function makeDb(hooks: {
 	first?: (sql: string, params: unknown[]) => Promise<unknown>;
 	all?: (sql: string, params: unknown[]) => Promise<{ results: unknown[] }>;
+	batchResult?: (stmt: RecordedStatement, index: number) => { meta: { changes: number } };
 }) {
 	const statements: RecordedStatement[] = [];
-	const batch = vi.fn(async (_stmts: RecordedStatement[]) => []);
+	const batch = vi.fn(async (stmts: RecordedStatement[]) =>
+		stmts.map((stmt, index) => hooks.batchResult?.(stmt, index) ?? { meta: { changes: 1 } }),
+	);
 	const db = {
 		prepare: vi.fn((sql: string) => ({
 			bind: (...params: unknown[]) => {
@@ -115,9 +121,11 @@ async function putRequest(
 		count?: number;
 		body?: Record<string, unknown>;
 		urlId?: string;
+		batchResult?: (stmt: RecordedStatement, index: number) => { meta: { changes: number } };
 	} = {},
 ) {
 	const { db, statements, getBatch } = makeDb({
+		batchResult: hooks.batchResult,
 		first: async (sql) => {
 			if (sql.includes("COUNT(*)")) {
 				return { n: hooks.count ?? 0 };
@@ -192,7 +200,7 @@ describe("handleChatsRequest", () => {
 		expect(inserts).toHaveLength(2);
 		// user_id, root_id, parent_id, depth, role, content, reasoning, created_at
 		expect(inserts[0]?.params[7]).toBe(null);
-		expect(inserts[1]?.params).toHaveLength(9);
+		expect(inserts[1]?.params).toHaveLength(10);
 		expect(inserts[1]?.params[7]).toBe("Considering the question.");
 	});
 
@@ -328,9 +336,12 @@ describe("PUT reconcile", () => {
 			expect.stringContaining("INSERT INTO messages"),
 			expect.stringContaining("INSERT INTO chats"),
 		]);
-		expect(batch[0]?.params).toEqual(["m1", USER_ID, "m1", null, 0, "user", "hi", null, 1]);
-		expect(batch[1]?.params).toEqual(["m2", USER_ID, "m1", "m1", 1, "assistant", "hello", null, 2]);
-		expect(batch[2]?.params).toEqual([CHAT_ID, USER_ID, "m1", "m2", "Test chat", 1, 2]);
+		expect(batch[0]?.sql).toContain("NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)");
+		expect(batch[1]?.sql).toContain("NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)");
+		expect(batch[2]?.sql).toContain("NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)");
+		expect(batch[0]?.params).toEqual(["m1", USER_ID, "m1", null, 0, "user", "hi", null, 1, CHAT_ID]);
+		expect(batch[1]?.params).toEqual(["m2", USER_ID, "m1", "m1", 1, "assistant", "hello", null, 2, CHAT_ID]);
+		expect(batch[2]?.params).toEqual([CHAT_ID, USER_ID, "m1", "m2", "Test chat", 1, 2, CHAT_ID]);
 		expect(batch.some((s) => s.sql.includes("DELETE"))).toBe(false);
 	});
 
@@ -352,10 +363,10 @@ describe("PUT reconcile", () => {
 		const inserts = batch.filter((s) => s.sql.includes("INSERT INTO messages"));
 		const updates = batch.filter((s) => s.sql.includes("UPDATE chats"));
 		expect(inserts).toHaveLength(2);
-		expect(inserts[0]?.params).toEqual(["m3", USER_ID, "m1", "m2", 2, "user", "c", null, 3]);
-		expect(inserts[1]?.params).toEqual(["m4", USER_ID, "m1", "m3", 3, "assistant", "d", null, 4]);
+		expect(inserts[0]?.params).toEqual(["m3", USER_ID, "m1", "m2", 2, "user", "c", null, 3, CHAT_ID, USER_ID, "m2"]);
+		expect(inserts[1]?.params).toEqual(["m4", USER_ID, "m1", "m3", 3, "assistant", "d", null, 4, CHAT_ID, USER_ID, "m2"]);
 		expect(updates).toHaveLength(1);
-		expect(updates[0]?.params).toEqual(["m4", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID]);
+		expect(updates[0]?.params).toEqual(["m4", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID, "m2"]);
 		expect(batch.some((s) => s.sql.includes("DELETE"))).toBe(false);
 	});
 
@@ -379,7 +390,7 @@ describe("PUT reconcile", () => {
 		expect(batch[0]?.sql).toContain("UPDATE chats");
 		expect(batch[0]?.params[0]).toBe("m2");
 		expect(batch[0]?.params[1]).toBe("m1");
-		expect(batch[0]?.params).toEqual(["m2", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID]);
+		expect(batch[0]?.params).toEqual(["m2", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID, "m4"]);
 	});
 
 	it("truncates to empty with leaf NULL and root NULL", async () => {
@@ -390,12 +401,11 @@ describe("PUT reconcile", () => {
 		const { response, batch } = await putRequest([], { chat: existingChat(path), path });
 		expect(response.status).toBe(200);
 		expect(batch.filter((s) => s.sql.includes("INSERT"))).toHaveLength(0);
-		expect(batch).toHaveLength(2);
+		expect(batch).toHaveLength(1);
 		expect(batch[0]?.sql).toContain("UPDATE chats");
-		expect(batch[0]?.params).toEqual([null, null, "Test chat", 1, 2, CHAT_ID, USER_ID]);
-		// The pointer left root m1: reclaim it after the pointer moved.
-		expect(batch[1]?.sql).toContain("DELETE FROM messages");
-		expect(batch[1]?.params).toEqual([USER_ID, "m1", USER_ID, "m1"]);
+		expect(batch[0]?.params).toEqual([null, null, "Test chat", 1, 2, CHAT_ID, USER_ID, "m2"]);
+		// The pointer left root m1: reclaim it after the CAS pointer write.
+		expect(gcRoot).toHaveBeenCalledWith(expect.anything(), USER_ID, "m1");
 	});
 
 	it("diverges at position 2 under P[1] at depth 2", async () => {
@@ -417,8 +427,8 @@ describe("PUT reconcile", () => {
 		expect(response.status).toBe(200);
 		const inserts = batch.filter((s) => s.sql.includes("INSERT INTO messages"));
 		expect(inserts).toHaveLength(2);
-		expect(inserts[0]?.params).toEqual(["m5", USER_ID, "m1", "m2", 2, "user", "e", null, 5]);
-		expect(inserts[1]?.params).toEqual(["m6", USER_ID, "m1", "m5", 3, "assistant", "f", null, 6]);
+		expect(inserts[0]?.params).toEqual(["m5", USER_ID, "m1", "m2", 2, "user", "e", null, 5, CHAT_ID, USER_ID, "m4"]);
+		expect(inserts[1]?.params).toEqual(["m6", USER_ID, "m1", "m5", 3, "assistant", "f", null, 6, CHAT_ID, USER_ID, "m4"]);
 		const pointer = batch.find((s) => s.sql.includes("UPDATE chats"));
 		expect(pointer?.params[0]).toBe("m6");
 		expect(pointer?.params[1]).toBe("m1");
@@ -440,7 +450,7 @@ describe("PUT reconcile", () => {
 		expect(isShared).toHaveBeenCalledWith(expect.anything(), USER_ID, "m2", CHAT_ID);
 		const messageUpdate = batch.filter((s) => s.sql.includes("UPDATE messages SET content"));
 		expect(messageUpdate).toHaveLength(1);
-		expect(messageUpdate[0]?.params).toEqual(["new", "think", "m2", USER_ID]);
+		expect(messageUpdate[0]?.params).toEqual(["new", "think", "m2", USER_ID, CHAT_ID, USER_ID, "m2"]);
 		expect(batch.filter((s) => s.sql.includes("INSERT INTO messages"))).toHaveLength(0);
 		expect(batch.find((s) => s.sql.includes("UPDATE chats"))?.params[0]).toBe("m2");
 	});
@@ -477,7 +487,7 @@ describe("PUT reconcile", () => {
 		expect(response.status).toBe(200);
 		expect(batch).toHaveLength(1);
 		expect(batch[0]?.sql).toContain("UPDATE chats");
-		expect(batch[0]?.params).toEqual(["m2", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID]);
+		expect(batch[0]?.params).toEqual(["m2", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID, "m2"]);
 		expect(isShared).not.toHaveBeenCalled();
 	});
 
@@ -551,7 +561,7 @@ describe("PUT reconcile", () => {
 		expect(batch.filter((s) => s.sql.includes("INSERT INTO messages"))).toHaveLength(0);
 		const reattach = batch.filter((s) => s.sql.includes("UPDATE messages"));
 		expect(reattach).toHaveLength(1);
-		expect(reattach[0]?.params).toEqual(["c-new", null, "m3", USER_ID]);
+		expect(reattach[0]?.params).toEqual(["c-new", null, "m3", USER_ID, CHAT_ID, USER_ID, "m2"]);
 		expect(batch.find((s) => s.sql.includes("UPDATE chats"))?.params[0]).toBe("m3");
 	});
 
@@ -573,5 +583,50 @@ describe("PUT reconcile", () => {
 		expect(response.status).toBe(400);
 		expect(await response.json()).toEqual({ ok: false, error: "message ids must be unique" });
 		expect(batch).toHaveLength(0);
+	});
+
+	it("returns 409 and skips gc when the pointer CAS loses", async () => {
+		const path = linearPath([
+			{ id: "m1", role: "user", content: "a", created_at: 1 },
+			{ id: "m2", role: "assistant", content: "b", created_at: 2 },
+		]);
+		const { response } = await putRequest([], {
+			chat: existingChat(path),
+			path,
+			batchResult: () => ({ meta: { changes: 0 } }),
+		});
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ ok: false, error: "Chat changed, reload" });
+		expect(gcRoot).not.toHaveBeenCalled();
+	});
+
+	it("guards every append INSERT/UPDATE with the old-leaf CAS", async () => {
+		const path = linearPath([
+			{ id: "m1", role: "user", content: "a", created_at: 1 },
+			{ id: "m2", role: "assistant", content: "b", created_at: 2 },
+		]);
+		const { response, batch } = await putRequest(
+			[
+				{ id: "m1", role: "user", content: "a", createdAt: 1 },
+				{ id: "m2", role: "assistant", content: "b", createdAt: 2 },
+				{ id: "m3", role: "user", content: "c", createdAt: 3 },
+				{ id: "m4", role: "assistant", content: "d", createdAt: 4 },
+			],
+			{ chat: existingChat(path), path },
+		);
+		expect(response.status).toBe(200);
+		const writes = batch.filter(
+			(s) => s.sql.includes("INSERT INTO messages") || s.sql.includes("UPDATE messages"),
+		);
+		expect(writes).toHaveLength(2);
+		for (const statement of writes) {
+			expect(statement.sql).toContain(
+				"EXISTS (SELECT 1 FROM chats WHERE id = ? AND user_id = ? AND leaf_id IS ?)",
+			);
+			expect(statement.params.slice(-3)).toEqual([CHAT_ID, USER_ID, "m2"]);
+		}
+		const pointer = batch.find((s) => s.sql.includes("UPDATE chats"));
+		expect(pointer?.sql).toContain("leaf_id IS ?");
+		expect(pointer?.params.at(-1)).toBe("m2");
 	});
 });

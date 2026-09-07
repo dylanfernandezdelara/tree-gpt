@@ -26,19 +26,29 @@ import {
 	type MessageRow,
 } from "./tree-types.js";
 
-/** Array cap of the compat PUT; maps 1:1 onto the schema's depth < MAX_DEPTH. */
-const MAX_MESSAGES = MAX_DEPTH;
-
 const SELECT_CHAT = `SELECT id, user_id, root_id, leaf_id, title, created_at, updated_at FROM chats WHERE id = ?`;
 const SELECT_CHAT_COUNT = `SELECT COUNT(*) AS n FROM chats WHERE user_id = ?`;
 const SELECT_LEAF_STATUS = `SELECT status, created_at FROM messages WHERE id = ? AND user_id = ?`;
 const SELECT_PATH_DONE = `${PATH_CTE} SELECT * FROM path WHERE status = 'done' ORDER BY depth ASC`;
 const UPDATE_MESSAGE = `UPDATE messages SET content = ?, reasoning = ? WHERE id = ? AND user_id = ?`;
 const UPDATE_REATTACHED = `UPDATE messages SET content = ?, reasoning = ?, status = 'done' WHERE id = ? AND user_id = ?`;
-const INSERT_MESSAGE = `INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at) VALUES (?, ?, ?, ?, ?, ?, 'done', ?, ?, ?)`;
-const UPDATE_CHAT = `UPDATE chats SET leaf_id = ?, root_id = ?, title = ?, created_at = ?, updated_at = ? WHERE id = ? AND user_id = ?`;
-const INSERT_CHAT = `INSERT INTO chats (id, user_id, root_id, leaf_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+const INSERT_MESSAGE = `INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at) SELECT ?, ?, ?, ?, ?, ?, 'done', ?, ?, ?`;
+const UPDATE_CHAT = `UPDATE chats SET leaf_id = ?, root_id = ?, title = ?, created_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND leaf_id IS ?`;
+const INSERT_CHAT = `INSERT INTO chats (id, user_id, root_id, leaf_id, title, created_at, updated_at) SELECT ?, ?, ?, ?, ?, ?, ?`;
 const DELETE_STALE_PENDING = `DELETE FROM messages WHERE id = ? AND user_id = ? AND status = 'pending'`;
+
+/** CAS: existing chat still points at the leaf we loaded. Bind: (chatId, userId, leafId). */
+const CHAT_LEAF_GUARD = `EXISTS (SELECT 1 FROM chats WHERE id = ? AND user_id = ? AND leaf_id IS ?)`;
+/** CAS: chat id is still unused. Bind: (chatId). */
+const CHAT_ABSENT_GUARD = `NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)`;
+
+type ReconcileGuard = { sql: string; binds: unknown[] };
+
+type ReconcilePlan = {
+	statements: D1PreparedStatement[];
+	pointerIndex: number;
+	gcRootId: string | null;
+};
 
 type ExistingNode = {
 	id: string;
@@ -152,7 +162,7 @@ async function replaceChat(
 		return Response.json({ ok: false, error: prefix.error }, { status: prefix.status });
 	}
 
-	const statements = buildReconcileBatch(
+	const plan = buildReconcileBatch(
 		env.DB,
 		user.id,
 		parsed.chat,
@@ -165,7 +175,13 @@ async function replaceChat(
 	);
 
 	try {
-		await env.DB.batch(statements);
+		const results = await env.DB.batch(plan.statements);
+		if ((results[plan.pointerIndex]?.meta.changes ?? 0) === 0) {
+			return Response.json({ ok: false, error: "Chat changed, reload" }, { status: 409 });
+		}
+		if (plan.gcRootId) {
+			await env.DB.batch(gcRoot(env.DB, user.id, plan.gcRootId));
+		}
 	} catch {
 		return Response.json({ ok: false, error: "Could not save chat" }, { status: 500 });
 	}
@@ -254,10 +270,7 @@ async function resolvePrefixEdits(
 		// orphaned tail after redo-then-redo). Parent+role match: skip INSERT
 		// (avoids the PK) and UPDATE content/reasoning when they differ.
 		const nextReasoning = storedReasoning(message);
-		if (
-			existingNode.content !== message.content ||
-			(existingNode.reasoning ?? undefined) !== message.reasoning
-		) {
+		if (contentOrReasoningChanged(existingNode, message)) {
 			skipInsert.set(message.id, {
 				id: message.id,
 				content: message.content,
@@ -289,6 +302,13 @@ async function loadExistingNodes(
 	return new Map(result.results.map((row) => [row.id, row]));
 }
 
+function reconcileGuard(existing: ChatRow | null, chatId: string, userId: string): ReconcileGuard {
+	if (existing) {
+		return { sql: CHAT_LEAF_GUARD, binds: [chatId, userId, existing.leaf_id] };
+	}
+	return { sql: CHAT_ABSENT_GUARD, binds: [chatId] };
+}
+
 function buildReconcileBatch(
 	db: D1Database,
 	userId: string,
@@ -299,13 +319,16 @@ function buildReconcileBatch(
 	edits: InPlaceEdit[],
 	skipInsert: Map<string, InPlaceEdit | null>,
 	stalePendingLeafId: string | null,
-): D1PreparedStatement[] {
+): ReconcilePlan {
 	const incoming = chat.messages;
 	const statements: D1PreparedStatement[] = [];
+	const guard = reconcileGuard(existing, chat.id, userId);
 
 	for (const edit of edits) {
 		statements.push(
-			db.prepare(UPDATE_MESSAGE).bind(edit.content, edit.reasoning, edit.id, userId),
+			db
+				.prepare(`${UPDATE_MESSAGE} AND ${guard.sql}`)
+				.bind(edit.content, edit.reasoning, edit.id, userId, ...guard.binds),
 		);
 	}
 
@@ -325,15 +348,21 @@ function buildReconcileBatch(
 			if (reattached) {
 				statements.push(
 					db
-						.prepare(UPDATE_REATTACHED)
-						.bind(reattached.content, reattached.reasoning, reattached.id, userId),
+						.prepare(`${UPDATE_REATTACHED} AND ${guard.sql}`)
+						.bind(
+							reattached.content,
+							reattached.reasoning,
+							reattached.id,
+							userId,
+							...guard.binds,
+						),
 				);
 			}
 			continue;
 		}
 		statements.push(
 			db
-				.prepare(INSERT_MESSAGE)
+				.prepare(`${INSERT_MESSAGE} WHERE ${guard.sql}`)
 				.bind(
 					message.id,
 					userId,
@@ -344,22 +373,42 @@ function buildReconcileBatch(
 					message.content,
 					storedReasoning(message),
 					message.createdAt,
+					...guard.binds,
 				),
 		);
 	}
 
+	const pointerIndex = statements.length;
 	if (existing) {
 		statements.push(
 			db
 				.prepare(UPDATE_CHAT)
-				.bind(leafId, rootId, chat.title, chat.createdAt, chat.updatedAt, chat.id, userId),
+				.bind(
+					leafId,
+					rootId,
+					chat.title,
+					chat.createdAt,
+					chat.updatedAt,
+					chat.id,
+					userId,
+					existing.leaf_id,
+				),
 		);
 	} else {
 		// Nodes first so chats.leaf_id FK can resolve.
 		statements.push(
 			db
-				.prepare(INSERT_CHAT)
-				.bind(chat.id, userId, rootId, leafId, chat.title, chat.createdAt, chat.updatedAt),
+				.prepare(`${INSERT_CHAT} WHERE ${guard.sql}`)
+				.bind(
+					chat.id,
+					userId,
+					rootId,
+					leafId,
+					chat.title,
+					chat.createdAt,
+					chat.updatedAt,
+					...guard.binds,
+				),
 		);
 	}
 
@@ -372,12 +421,11 @@ function buildReconcileBatch(
 	}
 
 	// Pointer left its old root (cleared chat or fully diverged document):
-	// reclaim whatever no remaining chat reaches in that root.
-	if (existing?.root_id && existing.root_id !== rootId) {
-		statements.push(...gcRoot(db, userId, existing.root_id));
-	}
+	// reclaim after the CAS pointer write actually moves the row.
+	const gcRootId =
+		existing?.root_id && existing.root_id !== rootId ? existing.root_id : null;
 
-	return statements;
+	return { statements, pointerIndex, gcRootId };
 }
 
 function longestCommonPrefix(path: MessageRow[], incoming: ApiMessage[]): number {
@@ -394,7 +442,10 @@ function longestCommonPrefix(path: MessageRow[], incoming: ApiMessage[]): number
 	return k;
 }
 
-function contentOrReasoningChanged(row: MessageRow, message: ApiMessage): boolean {
+function contentOrReasoningChanged(
+	row: { content: string; reasoning: string | null },
+	message: { content: string; reasoning?: string },
+): boolean {
 	return row.content !== message.content || (row.reasoning ?? undefined) !== message.reasoning;
 }
 
@@ -464,7 +515,7 @@ function parseChat(
 	if (!("messages" in body) || !Array.isArray(body.messages)) {
 		return { ok: false, error: "messages must be an array" };
 	}
-	if (body.messages.length > MAX_MESSAGES) {
+	if (body.messages.length > MAX_DEPTH) {
 		return { ok: false, error: "too many messages" };
 	}
 

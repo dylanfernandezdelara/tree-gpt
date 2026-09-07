@@ -5,39 +5,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser } from "./auth.js";
 import { loadPath, summaryFor } from "./tree.js";
 import type { ChatRow, ChatSummary, MessageRow } from "./tree-types.js";
-import { handleTurnRequest } from "./turns.js";
+import { PENDING_TIMEOUT_MS } from "./tree-types.js";
+import { abandonTurn, handleTurnRequest, planTurn, reserveTurn } from "./turns.js";
 
 vi.mock("./auth.js", () => ({
 	getSessionUser: vi.fn(async () => ({ id: "user-1", email: "user@example.com" })),
 	ensureDomainUser: vi.fn(async () => {}),
 }));
 
-vi.mock("./tree.js", () => ({
-	PATH_CTE: `WITH RECURSIVE path(id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at) AS (
-		SELECT id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at
-		FROM messages WHERE id = ? AND user_id = ?
-		UNION ALL
-		SELECT m.id, m.user_id, m.root_id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.created_at
-		FROM messages m JOIN path p ON m.id = p.parent_id AND m.user_id = p.user_id
-	)`,
-	loadPath: vi.fn(async () => [
-		{ id: "u2", role: "user", content: "hello", createdAt: 1 },
-		{ id: "a2", role: "assistant", content: "Hello, it's wonderful meeting you", createdAt: 2 },
-	]),
-	summaryFor: vi.fn((chat: ChatRow, _leaf: MessageRow | null, _now: number): ChatSummary => ({
-		id: chat.id,
-		title: chat.title,
-		rootId: chat.root_id,
-		leafId: chat.leaf_id,
-		generating: false,
-		createdAt: chat.created_at,
-		updatedAt: chat.updated_at,
-	})),
-	toApiMessage: vi.fn(),
-	loadAllPaths: vi.fn(),
-	isShared: vi.fn(),
-	gcRoot: vi.fn(),
-}));
+vi.mock("./tree.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./tree.js")>();
+	return {
+		...actual,
+		loadPath: vi.fn(async () => [
+			{ id: "u2", role: "user", content: "hello", createdAt: 1 },
+			{ id: "a2", role: "assistant", content: "Hello, it's wonderful meeting you", createdAt: 2 },
+		]),
+		summaryFor: vi.fn((chat: ChatRow, _leaf: MessageRow | null, _now: number): ChatSummary => ({
+			id: chat.id,
+			title: chat.title,
+			rootId: chat.root_id,
+			leafId: chat.leaf_id,
+			generating: false,
+			createdAt: chat.created_at,
+			updatedAt: chat.updated_at,
+		})),
+	};
+});
 
 type RecordedStatement = { sql: string; params: unknown[] };
 
@@ -166,6 +160,7 @@ function firstFor(rows: {
 	rootCount?: number;
 	rateLimit?: { windowStart: number; count: number };
 	forkIds?: Set<string>;
+	doneSibling?: { id: string };
 }) {
 	return async (sql: string, params: unknown[]) => {
 		if (sql.includes("openrouter_limits")) {
@@ -177,15 +172,22 @@ function firstFor(rows: {
 		if (sql.includes("COUNT(*)") && sql.includes("FROM messages")) {
 			return { n: rows.rootCount ?? 2 };
 		}
-		if (sql.includes("FROM chats")) {
+		if (sql.includes("SELECT id FROM chats WHERE id = ?")) {
 			const id = String(params[0]);
-			if (!sql.includes("user_id")) {
-				if (rows.forkIds?.has(id)) {
-					return { id };
-				}
-				return undefined;
+			if (rows.forkIds?.has(id)) {
+				return { id };
 			}
-			return rows.chats?.[id];
+			return undefined;
+		}
+		if (sql.includes("FROM chats")) {
+			return rows.chats?.[String(params[0])];
+		}
+		if (
+			sql.includes("role = 'assistant'") &&
+			sql.includes("status = 'done'") &&
+			sql.includes("ORDER BY created_at")
+		) {
+			return rows.doneSibling;
 		}
 		if (sql.includes("FROM messages")) {
 			return rows.messages?.[String(params[0])];
@@ -727,5 +729,208 @@ describe("handleTurnRequest", () => {
 		expect(statements.some((s) => s.sql.includes("DELETE FROM messages") && s.params[0] === "a2")).toBe(
 			true,
 		);
+	});
+
+	it("returns 409 when complete loses the pending row", async () => {
+		fetchMock.mockResolvedValue(fixtureResponse());
+		const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
+		const { db } = makeDb({
+			first: firstFor({
+				chats,
+				messages: { a1: parentLeaf, u1: userParent },
+			}),
+			all: async () => ({ results: pathMessages }),
+			batch: async (stmts) => {
+				const completing = stmts.some((s) => s.sql.includes("status = 'done'"));
+				if (completing) {
+					return stmts.map((s) => ({
+						meta: { changes: s.sql.includes("UPDATE messages") ? 0 : 1 },
+					}));
+				}
+				chats["chat-1"] = { ...sourceChat, leaf_id: "a2" };
+				return stmts.map(() => ({ meta: { changes: 1 } }));
+			},
+		});
+		const { ctx, promises } = makeCtx();
+		const response = await handleTurnRequest(turnRequest("chat-1", appendBody), envWith(db), ctx, "chat-1");
+		await Promise.all(promises);
+		expect(response.status).toBe(409);
+		const body = (await response.json()) as { ok: boolean; error: string };
+		expect(body.ok).toBe(false);
+		expect(body.error).toBe("Reply was abandoned before it finished");
+	});
+
+	it("redo reserve emits one message insert under parentId", async () => {
+		fetchMock.mockResolvedValue(new Response("nope", { status: 502 }));
+		const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
+		const { db, statements } = makeDb({
+			first: firstFor({
+				chats,
+				messages: { a1: parentLeaf, u1: userParent },
+			}),
+			all: async () => ({ results: pathMessages }),
+			batch: async (stmts) => {
+				chats["chat-1"] = { ...sourceChat, leaf_id: "a2b" };
+				return stmts.map(() => ({ meta: { changes: 1 } }));
+			},
+		});
+		const { ctx, promises } = makeCtx();
+		await handleTurnRequest(
+			turnRequest("chat-1", { parentId: "u1", expectLeaf: "a1", replyId: "a2b" }),
+			envWith(db),
+			ctx,
+			"chat-1",
+		);
+		await Promise.all(promises);
+		const inserts = statements.filter((s) => /^\s*INSERT INTO messages/i.test(s.sql));
+		expect(inserts).toHaveLength(1);
+		expect(inserts[0]?.params[3]).toBe("u1");
+	});
+
+	it("fork happy path does not update the source chat pointer", async () => {
+		fetchMock.mockResolvedValue(fixtureResponse());
+		const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
+		const { db, statements } = makeDb({
+			first: firstFor({
+				chats,
+				messages: { a1: parentLeaf, u1: userParent },
+				chatCount: 1,
+			}),
+			all: async () => ({ results: pathMessages }),
+			batch: async (stmts) => {
+				chats["fork-1"] = {
+					...sourceChat,
+					id: "fork-1",
+					leaf_id: "a2",
+					title: "Fork",
+				};
+				return stmts.map(() => ({ meta: { changes: 1 } }));
+			},
+		});
+		const { ctx, promises } = makeCtx();
+		const response = await handleTurnRequest(
+			turnRequest("chat-1", {
+				...appendBody,
+				fork: { chatId: "fork-1", title: "Fork" },
+			}),
+			envWith(db),
+			ctx,
+			"chat-1",
+		);
+		await Promise.all(promises);
+		expect(response.status).toBe(200);
+		expect(
+			statements.some((s) => /^\s*UPDATE chats\b/i.test(s.sql) && s.params.includes("chat-1")),
+		).toBe(false);
+	});
+
+	it("abandons a stale pending replay then returns 409 timed out", async () => {
+		const stale: MessageRow = {
+			...parentLeaf,
+			id: "a2",
+			status: "pending",
+			content: "",
+			created_at: Date.now() - PENDING_TIMEOUT_MS - 1_000,
+		};
+		const { db, statements } = makeDb({
+			first: firstFor({
+				chats: { "chat-1": { ...sourceChat, leaf_id: "a2" } },
+				messages: { a2: stale, u1: userParent },
+			}),
+		});
+		const { ctx } = makeCtx();
+		const response = await handleTurnRequest(turnRequest("chat-1", appendBody), envWith(db), ctx, "chat-1");
+		expect(response.status).toBe(409);
+		const body = (await response.json()) as { ok: boolean; error: string };
+		expect(body.ok).toBe(false);
+		expect(body.error).toBe("Reply timed out");
+		expect(statements.some((s) => s.sql.includes("DELETE FROM messages") && s.params[0] === "a2")).toBe(
+			true,
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("stale replay abandon uses the stored reply parent, not the body parentId", async () => {
+		const stale: MessageRow = {
+			...parentLeaf,
+			id: "a2",
+			parent_id: "u2",
+			status: "pending",
+			content: "",
+			created_at: Date.now() - PENDING_TIMEOUT_MS - 1_000,
+		};
+		const storedParent: MessageRow = {
+			id: "u2",
+			user_id: "user-1",
+			root_id: "u1",
+			parent_id: "a1",
+			depth: 2,
+			role: "user",
+			status: "done",
+			content: "hello",
+			reasoning: null,
+			created_at: 2,
+		};
+		const { db, statements } = makeDb({
+			first: firstFor({
+				chats: { "chat-1": { ...sourceChat, leaf_id: "a2" } },
+				messages: { a2: stale, u2: storedParent, a1: parentLeaf },
+			}),
+		});
+		const { ctx } = makeCtx();
+		const response = await handleTurnRequest(
+			turnRequest("chat-1", { ...appendBody, parentId: "other-parent" }),
+			envWith(db),
+			ctx,
+			"chat-1",
+		);
+		expect(response.status).toBe(409);
+		const body = (await response.json()) as { error: string };
+		expect(body.error).toBe("Reply timed out");
+		const abandonUpdate = statements.find(
+			(s) => s.sql.includes("UPDATE chats SET leaf_id") && s.sql.includes("CASE WHEN"),
+		);
+		expect(abandonUpdate?.params[0]).toBe("u2");
+		expect(abandonUpdate?.params[0]).not.toBe("other-parent");
+	});
+
+	it("planTurn then reserveTurn builds the append batch", async () => {
+		const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
+		const { db, statements } = makeDb({
+			first: firstFor({
+				chats,
+				messages: { a1: parentLeaf, u1: userParent },
+			}),
+			batch: async (stmts) => {
+				chats["chat-1"] = { ...sourceChat, leaf_id: "a2" };
+				return stmts.map(() => ({ meta: { changes: 1 } }));
+			},
+		});
+		const planned = await planTurn(db, "user-1", "chat-1", { ...appendBody, stream: false }, 1_000);
+		expect(planned.ok).toBe(true);
+		if (!planned.ok) {
+			return;
+		}
+		expect(planned.plan.reserveCase.kind).toBe("append");
+		expect(planned.plan.replyParentId).toBe("u2");
+		const reserved = await reserveTurn(db, "user-1", appendBody, planned.plan, 1_000);
+		expect(reserved.ok).toBe(true);
+		expect(statements.some((s) => /^\s*INSERT INTO messages/i.test(s.sql))).toBe(true);
+	});
+});
+
+describe("abandonTurn", () => {
+	it("guards the pointer move so a done reply is not un-pointed", async () => {
+		const { db, statements } = makeDb({});
+		await abandonTurn(db, "user-1", "a2", "u1");
+		const pointer = statements.find(
+			(s) => s.sql.includes("UPDATE chats SET leaf_id") && s.sql.includes("CASE WHEN"),
+		);
+		expect(pointer).toBeDefined();
+		expect(pointer?.sql).toMatch(
+			/EXISTS\s*\(\s*SELECT 1 FROM messages WHERE id = \? AND user_id = \? AND status = 'pending'\)/,
+		);
+		expect(pointer?.params[4]).toBe("a2");
+		expect(pointer?.params[5]).toBe("a2");
 	});
 });
