@@ -16,6 +16,9 @@ export function createAuth(env: Env, request: Request) {
 			github: {
 				clientId: env.GITHUB_CLIENT_ID,
 				clientSecret: env.GITHUB_CLIENT_SECRET,
+				// Sign-in only. Better Auth defaults also include `read:user`.
+				disableDefaultScope: true,
+				scope: ["user:email"],
 			},
 		},
 		databaseHooks: {
