@@ -303,21 +303,98 @@ export async function requestStreamCompletion(
 function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 	const decoder = new TextDecoder();
+	const reader = upstream.getReader();
 	let buffer = "";
 	let model = CHAT_MODEL;
 	let reasoningSent = 0;
-	let closed = false;
+	let finished = false;
 
-	function emit(controller: ReadableStreamDefaultController<Uint8Array>, event: StreamEvent) {
-		if (!closed) {
-			controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-		}
-	}
+	return new ReadableStream<Uint8Array>({
+		// Pump from start(), not pull(): resolving pulls without enqueueing
+		// (long encrypted-reasoning stretches with no displayable frames)
+		// stalls delivery, idles the response, and the edge closes it.
+		async start(controller) {
+			const emit = (event: StreamEvent) => {
+				if (!finished) {
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				}
+			};
+			const heartbeat = () => {
+				if (!finished) {
+					controller.enqueue(encoder.encode(`:thinking\n\n`));
+				}
+			};
+			const finish = (event: StreamEvent) => {
+				if (!finished) {
+					finished = true;
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				}
+				try {
+					controller.close();
+				} catch {
+					// Consumer already gone; nothing to unwind.
+				}
+			};
+			try {
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) {
+						break;
+					}
+					buffer += decoder.decode(value, { stream: true });
+					const frames = buffer.split("\n\n");
+					buffer = frames.pop() ?? "";
+					for (const frame of frames) {
+						const collected = collectFrameEvents(frame);
+						if (collected.length === 0) {
+							heartbeat();
+							continue;
+						}
+						for (const event of collected) {
+							if (event === "upstream-error") {
+								emit({ type: "error", error: "OpenRouter returned an error" });
+								finished = true;
+								try {
+									await reader.cancel();
+								} catch {
+									// Already settled; nothing to unwind.
+								}
+								try {
+									controller.close();
+								} catch {
+									// Consumer already gone; nothing to unwind.
+								}
+								return;
+							}
+							emit(event);
+						}
+					}
+				}
+				if (buffer.trim()) {
+					for (const event of collectFrameEvents(buffer)) {
+						if (event !== "upstream-error") {
+							emit(event);
+						}
+					}
+					buffer = "";
+				}
+				finish({ type: "done", model });
+			} catch {
+				finish({ type: "error", error: "Stream interrupted" });
+			}
+		},
+		async cancel() {
+			finished = true;
+			try {
+				await reader.cancel();
+			} catch {
+				// Reader already settled; nothing to unwind.
+			}
+		},
+	});
 
-	function handleFrame(
-		controller: ReadableStreamDefaultController<Uint8Array>,
-		frame: string,
-	) {
+	function collectFrameEvents(frame: string): (StreamEvent | "upstream-error")[] {
+		const events: (StreamEvent | "upstream-error")[] = [];
 		for (const line of frame.split("\n")) {
 			const data = line.startsWith("data:") ? line.slice(5).trim() : "";
 			if (!data || data === "[DONE]") {
@@ -336,9 +413,7 @@ function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<U
 				model = payload.model;
 			}
 			if ("error" in payload) {
-				emit(controller, { type: "error", error: "OpenRouter returned an error" });
-				closed = true;
-				return;
+				return ["upstream-error"];
 			}
 			const delta = readDelta(payload);
 			if (!delta) {
@@ -349,64 +424,15 @@ function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<U
 				const text = delta.reasoning.slice(0, room);
 				reasoningSent += text.length;
 				if (text) {
-					emit(controller, { type: "reasoning", text });
+					events.push({ type: "reasoning", text });
 				}
 			}
 			if (delta.content) {
-				emit(controller, { type: "content", text: delta.content });
+				events.push({ type: "content", text: delta.content });
 			}
 		}
+		return events;
 	}
-
-	const reader = upstream.getReader();
-	return new ReadableStream<Uint8Array>({
-		async pull(controller) {
-			if (closed) {
-				controller.close();
-				return;
-			}
-			try {
-				const { done, value } = await reader.read();
-				if (done) {
-					const tail = buffer;
-					buffer = "";
-					if (tail.trim()) {
-						handleFrame(controller, tail);
-					}
-					if (!closed) {
-						emit(controller, { type: "done", model });
-					}
-					controller.close();
-					return;
-				}
-				buffer += decoder.decode(value, { stream: true });
-				const frames = buffer.split("\n\n");
-				buffer = frames.pop() ?? "";
-				for (const frame of frames) {
-					handleFrame(controller, frame);
-					if (closed) {
-						break;
-					}
-				}
-				if (closed) {
-					controller.close();
-				}
-			} catch {
-				if (!closed) {
-					emit(controller, { type: "error", error: "Stream interrupted" });
-				}
-				controller.close();
-			}
-		},
-		async cancel() {
-			closed = true;
-			try {
-				await reader.cancel();
-			} catch {
-				// Reader already settled; nothing to unwind.
-			}
-		},
-	});
 }
 
 function readDelta(payload: object): { content?: string; reasoning?: string } | null {

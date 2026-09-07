@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleOpenRouterRequest, requestCompletion } from "./openrouter.js";
 
@@ -214,6 +217,51 @@ describe("handleOpenRouterRequest", () => {
 			{ type: "content", text: " there" },
 			{ type: "done", model: "meta/muse-spark-1.3-contributor" },
 		]);
+	});
+
+	it("handles the real Muse wire shape (encrypted reasoning, comments)", async () => {
+		// Recorded live from OpenRouter: Muse streams opaque
+		// reasoning.encrypted blobs (no text) plus content deltas.
+		const raw = readFileSync(join(import.meta.dirname, "testdata", "muse-minimal.sse"));
+		fetchMock.mockResolvedValue(
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						// Awkward chunk sizes to stress frame reassembly.
+						for (let i = 0; i < raw.length; i += 997) {
+							controller.enqueue(new Uint8Array(raw.slice(i, i + 997)));
+						}
+						controller.close();
+					},
+				}),
+				{ status: 200 },
+			),
+		);
+		const request = new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ message: "Say hi in five words.", stream: true }),
+		});
+
+		const response = await handleOpenRouterRequest(request, env());
+		expect(response.status).toBe(200);
+		const events = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
+
+		const content = events
+			.filter((event) => event.type === "content")
+			.map((event) => String(event.text))
+			.join("");
+		expect(content.trim().length).toBeGreaterThan(0);
+		// Encrypted thinking has no displayable text: skipped, not fatal.
+		expect(events.some((event) => event.type === "reasoning")).toBe(false);
+		expect(events.some((event) => event.type === "error")).toBe(false);
+		expect(events[events.length - 1]).toEqual({
+			type: "done",
+			model: "meta/muse-spark-1.3-contributor",
+		});
 	});
 
 	it("turns mid-stream upstream errors into an error event", async () => {
