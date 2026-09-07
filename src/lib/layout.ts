@@ -17,12 +17,22 @@ export type SplitNode = {
 export type LayoutNode = PaneLeaf | SplitNode;
 
 export type DropSide = "left" | "right" | "top" | "bottom" | "center";
-export type DragPayload = { chatId: string | null };
+
+/** What is being dragged: a chat out of the sidebar, or a pane by its header. */
+export type DragPayload =
+	| { kind: "chat"; chatId: string | null }
+	| { kind: "pane"; paneId: string };
 
 /** Drag-and-drop payload type for chats dragged out of the sidebar. */
 export const DRAG_MIME = "application/x-treegpt-chat";
-/** Beyond this many panes, split drops are ignored (center drops still work). */
-export const MAX_PANES = 8;
+/**
+ * A pane may never become narrower or shorter than a quarter of the screen,
+ * so each axis supports at most 2^2 = 4 divisions. That bounds the layout to
+ * a 4x4 grid: every pane covers at least 1/16 of the area, so at most 16 fit.
+ */
+export const MAX_AXIS_DEPTH = 2;
+/** Implied by MAX_AXIS_DEPTH; kept as an explicit guard. */
+export const MAX_PANES = 16;
 /** Fraction of a pane's width/height that counts as an edge zone. */
 const EDGE_FRACTION = 0.25;
 
@@ -35,6 +45,47 @@ export function listPanes(root: LayoutNode): PaneLeaf[] {
 		return [root];
 	}
 	return [...listPanes(root.children[0]), ...listPanes(root.children[1])];
+}
+
+/** Splits above a pane, per direction: how many times its width and height were halved. */
+export type PaneDepth = { row: number; column: number };
+
+export function paneDepth(root: LayoutNode, paneId: string): PaneDepth | null {
+	function walk(node: LayoutNode, row: number, column: number): PaneDepth | null {
+		if (node.kind === "pane") {
+			return node.id === paneId ? { row, column } : null;
+		}
+		const nextRow = node.direction === "row" ? row + 1 : row;
+		const nextColumn = node.direction === "column" ? column + 1 : column;
+		return (
+			walk(node.children[0], nextRow, nextColumn) ??
+			walk(node.children[1], nextRow, nextColumn)
+		);
+	}
+	return walk(root, 0, 0);
+}
+
+/** Which axes a pane can still be split along without dropping below a quarter of the screen. */
+export type SplitAbility = { horizontal: boolean; vertical: boolean };
+
+export function splitAbility(root: LayoutNode, paneId: string): SplitAbility {
+	const depth = listPanes(root).length >= MAX_PANES ? null : paneDepth(root, paneId);
+	if (!depth) {
+		return { horizontal: false, vertical: false };
+	}
+	return {
+		horizontal: depth.row < MAX_AXIS_DEPTH,
+		vertical: depth.column < MAX_AXIS_DEPTH,
+	};
+}
+
+/** Whether a split on one edge is allowed; `center` (replace) is always allowed. */
+export function canSplit(root: LayoutNode, paneId: string, side: DropSide): boolean {
+	if (side === "center") {
+		return true;
+	}
+	const ability = splitAbility(root, paneId);
+	return side === "left" || side === "right" ? ability.horizontal : ability.vertical;
 }
 
 export function findPane(root: LayoutNode, paneId: string): PaneLeaf | null {
@@ -66,9 +117,26 @@ export function setPaneChat(root: LayoutNode, paneId: string, chatId: string | n
 }
 
 /**
- * Split a pane along one edge. The new pane takes the dropped side:
- * left/top → new pane first, right/bottom → new pane second.
+ * Put an existing leaf on one edge of a pane, splitting it. The leaf takes the
+ * dropped side: left/top → leaf first, right/bottom → leaf second.
  */
+function attach(
+	root: LayoutNode,
+	paneId: string,
+	side: Exclude<DropSide, "center">,
+	leaf: PaneLeaf,
+): LayoutNode {
+	const direction: SplitDirection = side === "left" || side === "right" ? "row" : "column";
+	const leafFirst = side === "left" || side === "top";
+	return replaceLeaf(root, paneId, (target) => ({
+		kind: "split",
+		id: newId(),
+		direction,
+		children: leafFirst ? [leaf, target] : [target, leaf],
+	}));
+}
+
+/** Split a pane along one edge, putting a new pane holding `chatId` on that side. */
 export function splitPane(
 	root: LayoutNode,
 	paneId: string,
@@ -76,15 +144,119 @@ export function splitPane(
 	chatId: string | null,
 ): { root: LayoutNode; newPaneId: string } {
 	const fresh = createPane(chatId);
-	const direction: SplitDirection = side === "left" || side === "right" ? "row" : "column";
-	const freshFirst = side === "left" || side === "top";
-	const next = replaceLeaf(root, paneId, (leaf) => ({
-		kind: "split",
-		id: newId(),
-		direction,
-		children: freshFirst ? [fresh, leaf] : [leaf, fresh],
-	}));
-	return { root: next, newPaneId: fresh.id };
+	return { root: attach(root, paneId, side, fresh), newPaneId: fresh.id };
+}
+
+/**
+ * Move a pane onto one edge of another. It is pruned from its old position
+ * first, so its former sibling expands to fill the gap. The same leaf object
+ * is re-attached, keeping the pane id and therefore its draft.
+ */
+export function movePane(
+	root: LayoutNode,
+	sourceId: string,
+	targetId: string,
+	side: Exclude<DropSide, "center">,
+): LayoutNode {
+	if (sourceId === targetId) {
+		return root;
+	}
+	const source = findPane(root, sourceId);
+	if (!source) {
+		return root;
+	}
+	const pruned = removePane(root, sourceId);
+	if (!findPane(pruned, targetId)) {
+		return root;
+	}
+	return attach(pruned, targetId, side, source);
+}
+
+/**
+ * Exchange two panes' positions. One traversal on purpose: replacing them one
+ * after the other would briefly leave two leaves sharing an id.
+ */
+export function swapPanes(root: LayoutNode, aId: string, bId: string): LayoutNode {
+	if (aId === bId) {
+		return root;
+	}
+	const a = findPane(root, aId);
+	const b = findPane(root, bId);
+	if (!a || !b) {
+		return root;
+	}
+	function walk(node: LayoutNode): LayoutNode {
+		if (node.kind === "pane") {
+			if (node.id === aId) {
+				return b as PaneLeaf;
+			}
+			return node.id === bId ? (a as PaneLeaf) : node;
+		}
+		const [first, second] = node.children;
+		const nextFirst = walk(first);
+		const nextSecond = walk(second);
+		return nextFirst === first && nextSecond === second
+			? node
+			: { ...node, children: [nextFirst, nextSecond] };
+	}
+	return walk(root);
+}
+
+/** Every drop target a pane offers for the drag in progress. */
+export type DropAbility = {
+	sides: Record<DropSide, boolean>;
+	/** Dropping on this pane's header does something. */
+	swap: boolean;
+};
+
+const NO_DROPS: DropAbility = {
+	sides: { left: false, right: false, top: false, bottom: false, center: false },
+	swap: false,
+};
+
+/**
+ * What the pane `targetPaneId` accepts from the drag in progress. Drives both
+ * the hover preview and the drop handler, so they can never disagree.
+ */
+export function dropAbility(
+	root: LayoutNode,
+	targetPaneId: string,
+	payload: DragPayload | null,
+): DropAbility {
+	if (!payload) {
+		return NO_DROPS;
+	}
+	if (payload.kind === "chat") {
+		const ability = splitAbility(root, targetPaneId);
+		return {
+			sides: {
+				left: ability.horizontal,
+				right: ability.horizontal,
+				top: ability.vertical,
+				bottom: ability.vertical,
+				center: true,
+			},
+			swap: true,
+		};
+	}
+	if (payload.paneId === targetPaneId) {
+		return NO_DROPS;
+	}
+	// A move frees the source's slot first, which can reclaim depth for the target.
+	const pruned = removePane(root, payload.paneId);
+	const ability = findPane(pruned, targetPaneId)
+		? splitAbility(pruned, targetPaneId)
+		: { horizontal: false, vertical: false };
+	return {
+		sides: {
+			left: ability.horizontal,
+			right: ability.horizontal,
+			top: ability.vertical,
+			bottom: ability.vertical,
+			center: false,
+		},
+		swap: true,
+	};
 }
 
 /** Remove a pane; its sibling takes the parent's place. The last pane is emptied instead. */
@@ -176,7 +348,9 @@ export function writeDragPayload(
 ): void {
 	dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));
 	dataTransfer.setData("text/plain", label);
-	dataTransfer.effectAllowed = "copy";
+	// Both are permitted: a sidebar chat is copied into a pane, a pane is moved.
+	// A dropEffect outside effectAllowed makes the browser refuse the drop.
+	dataTransfer.effectAllowed = "copyMove";
 }
 
 export function hasDragPayload(dataTransfer: DataTransfer): boolean {
@@ -193,8 +367,17 @@ export function readDragPayload(dataTransfer: DataTransfer): DragPayload | null 
 		if (typeof parsed !== "object" || parsed === null) {
 			return null;
 		}
-		const chatId = (parsed as Record<string, unknown>).chatId;
-		return { chatId: typeof chatId === "string" ? chatId : null };
+		const record = parsed as Record<string, unknown>;
+		if (record.kind === "pane") {
+			return typeof record.paneId === "string" ? { kind: "pane", paneId: record.paneId } : null;
+		}
+		if (record.kind === "chat") {
+			return {
+				kind: "chat",
+				chatId: typeof record.chatId === "string" ? record.chatId : null,
+			};
+		}
+		return null;
 	} catch {
 		return null;
 	}

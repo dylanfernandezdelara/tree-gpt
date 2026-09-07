@@ -5,7 +5,7 @@ import {
 	type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { AuthUser } from "../lib/auth-client";
-import { writeDragPayload } from "../lib/layout";
+import { writeDragPayload, type DragPayload } from "../lib/layout";
 import type { Chat } from "../types";
 import { IconButton } from "./IconButton";
 import { ComposeIcon, MoreIcon, PencilIcon, SidebarIcon, TrashIcon } from "./Icons";
@@ -23,6 +23,8 @@ type Props = {
 	/** Signed-in user, or null when signed out. */
 	user: AuthUser | null;
 	onLogOut: () => void;
+	onDragStart: (payload: DragPayload) => void;
+	onDragEnd: () => void;
 };
 
 export function Sidebar({
@@ -36,6 +38,8 @@ export function Sidebar({
 	onDelete,
 	user,
 	onLogOut,
+	onDragStart,
+	onDragEnd,
 }: Props) {
 	return (
 		<aside className={`sidebar${open ? "" : " sidebar--closed"}`} aria-hidden={!open}>
@@ -52,9 +56,12 @@ export function Sidebar({
 						className={`sidebar__row${activeChatId === null ? " sidebar__row--active" : ""}`}
 						onClick={onNewChat}
 						draggable
-						onDragStart={(event) =>
-							writeDragPayload(event.dataTransfer, { chatId: null }, "New chat")
-						}
+						onDragStart={(event) => {
+							const payload: DragPayload = { kind: "chat", chatId: null };
+							writeDragPayload(event.dataTransfer, payload, "New chat");
+							onDragStart(payload);
+						}}
+						onDragEnd={onDragEnd}
 					>
 						<ComposeIcon />
 						<span>New chat</span>
@@ -69,6 +76,8 @@ export function Sidebar({
 										chat={chat}
 										active={chat.id === activeChatId}
 										onSelect={() => onSelect(chat.id)}
+										onDragStart={onDragStart}
+										onDragEnd={onDragEnd}
 										onRename={(title) => onRename(chat.id, title)}
 										onDelete={() => onDelete(chat.id)}
 									/>
@@ -91,11 +100,21 @@ type RowProps = {
 	chat: Chat;
 	active: boolean;
 	onSelect: () => void;
+	onDragStart: (payload: DragPayload) => void;
+	onDragEnd: () => void;
 	onRename: (title: string) => void;
 	onDelete: () => void;
 };
 
-function ChatRow({ chat, active, onSelect, onRename, onDelete }: RowProps) {
+function ChatRow({
+	chat,
+	active,
+	onSelect,
+	onDragStart,
+	onDragEnd,
+	onRename,
+	onDelete,
+}: RowProps) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(chat.title);
@@ -175,9 +194,12 @@ function ChatRow({ chat, active, onSelect, onRename, onDelete }: RowProps) {
 					title={chat.title}
 					aria-current={active ? "page" : undefined}
 					draggable
-					onDragStart={(event) =>
-						writeDragPayload(event.dataTransfer, { chatId: chat.id }, chat.title)
-					}
+					onDragStart={(event) => {
+						const payload: DragPayload = { kind: "chat", chatId: chat.id };
+						writeDragPayload(event.dataTransfer, payload, chat.title);
+						onDragStart(payload);
+					}}
+					onDragEnd={onDragEnd}
 				>
 					{chat.title}
 				</button>

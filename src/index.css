@@ -383,6 +383,15 @@ button {
 	font-size: 14px;
 	line-height: 20px;
 	color: var(--text-secondary);
+	cursor: grab;
+	transition: background 0.12s ease;
+}
+
+/* The bar being dragged, and the bar it would swap with, share one highlight. */
+.pane__header--dragging,
+.pane__header--target {
+	background: var(--bubble-bg);
+	color: var(--bubble-text);
 }
 
 .pane--focused .pane__header {
@@ -440,6 +449,7 @@ button {
 .pane__drop--center {
 	inset: 8px;
 }
+
 
 /* Narrow panes drop the wide gutters. */
 @container (max-width: 720px) {

@@ -11,12 +11,15 @@ import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
 import {
 	clearChat,
+	dropAbility,
 	findPane,
 	listPanes,
-	MAX_PANES,
+	movePane,
 	removePane,
 	setPaneChat,
 	splitPane,
+	swapPanes,
+	type DragPayload,
 	type DropSide,
 	type LayoutNode,
 } from "./lib/layout";
@@ -83,6 +86,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	/** Chats with a reply in flight (one request per chat; chats run concurrently). */
 	const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
+	/** What is being dragged right now; drives every pane's drop preview. */
+	const [drag, setDrag] = useState<DragPayload | null>(null);
 	const pendingRef = useRef(new Map<string, AbortController>());
 	const syncRef = useRef<RemoteSync | null>(null);
 
@@ -197,22 +202,45 @@ function ChatApp({ user }: { user: AuthUser }) {
 		}));
 	}
 
-	function dropOnPane(paneId: string, side: DropSide, chatId: string | null) {
-		if (side === "center") {
-			openInPane(paneId, chatId);
-			return;
-		}
+	/**
+	 * Something was dropped on a pane. A chat opens or splits; a pane swaps
+	 * (header) or moves (edge). The ability is re-checked here so a stale hover
+	 * preview can never apply an illegal change.
+	 */
+	function dropOnPane(paneId: string, target: DropSide | "swap", payload: DragPayload) {
+		setDrag(null);
 		updateStore((prev) => {
-			if (listPanes(prev.layout).length >= MAX_PANES || !findPane(prev.layout, paneId)) {
+			if (!findPane(prev.layout, paneId)) {
 				return prev;
 			}
-			const { root, newPaneId } = splitPane(
-				prev.layout,
-				paneId,
-				side,
-				resolveChatId(prev, chatId),
-			);
-			return { ...prev, layout: root, focusedPaneId: newPaneId };
+			const ability = dropAbility(prev.layout, paneId, payload);
+			const allowed = target === "swap" ? ability.swap : ability.sides[target];
+			if (!allowed) {
+				return prev;
+			}
+			if (payload.kind === "chat") {
+				const chatId = resolveChatId(prev, payload.chatId);
+				if (target === "swap" || target === "center") {
+					return {
+						...prev,
+						layout: setPaneChat(prev.layout, paneId, chatId),
+						focusedPaneId: paneId,
+					};
+				}
+				const { root, newPaneId } = splitPane(prev.layout, paneId, target, chatId);
+				return { ...prev, layout: root, focusedPaneId: newPaneId };
+			}
+			if (target === "swap") {
+				return { ...prev, layout: swapPanes(prev.layout, payload.paneId, paneId) };
+			}
+			if (target === "center") {
+				return prev;
+			}
+			return {
+				...prev,
+				layout: movePane(prev.layout, payload.paneId, paneId, target),
+				focusedPaneId: payload.paneId,
+			};
 		});
 	}
 
@@ -465,6 +493,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 				onDelete={deleteChat}
 				user={user}
 				onLogOut={logOut}
+				onDragStart={setDrag}
+				onDragEnd={() => setDrag(null)}
 			/>
 			<main className="main">
 				<header className="main__header">
@@ -502,13 +532,18 @@ function ChatApp({ user }: { user: AuthUser }) {
 										busy={streaming}
 										model={model}
 										onModelChange={setModel}
+										ability={dropAbility(layout, pane.id, drag)}
+										dragging={drag?.kind === "pane" && drag.paneId === pane.id}
+										dropEffect={drag?.kind === "pane" ? "move" : "copy"}
 										onFocus={() => focusPane(pane.id)}
 										onClose={() => closePane(pane.id)}
 										onDraftChange={(value) => setDraft(pane.id, value)}
 										onSend={() => send(pane.id)}
 										onStop={() => stop(pane.id)}
 										onRedo={(messageId) => redo(pane.id, messageId)}
-										onDrop={(side, chatId) => dropOnPane(pane.id, side, chatId)}
+										onDragStart={setDrag}
+										onDragEnd={() => setDrag(null)}
+										onDrop={(target, payload) => dropOnPane(pane.id, target, payload)}
 									/>
 								);
 							}}
