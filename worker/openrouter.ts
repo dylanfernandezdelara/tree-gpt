@@ -1,9 +1,17 @@
+import { getSessionUser } from "./auth.js";
+
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const FREE_MODEL = "openrouter/free";
 
 const MAX_TURN_CHARS = 8_000;
 const MAX_HISTORY = 50;
 const MAX_HISTORY_CHARS = 32_000;
+
+// Per-user generate quota: at most MAX_GENERATES_PER_WINDOW calls per WINDOW_MS.
+// Checked before any upstream call so a runaway client or compromised
+// account cannot burn the server key without bound.
+const WINDOW_MS = 3_600_000;
+const MAX_GENERATES_PER_WINDOW = 60;
 
 export type CompletionRole = "user" | "assistant";
 
@@ -27,6 +35,14 @@ export async function handleOpenRouterRequest(
 	request: Request,
 	env: Env,
 ): Promise<Response> {
+	// Accident-prevention: only signed-in users may spend the server key.
+	// The session check ties every generate call to an authenticated caller;
+	// it does not hide the live turn from the Worker or OpenRouter.
+	const user = await getSessionUser(request, env);
+	if (!user) {
+		return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+	}
+
 	if (request.method !== "POST") {
 		return Response.json({ ok: false, error: "Use POST" }, { status: 405 });
 	}
@@ -41,6 +57,18 @@ export async function handleOpenRouterRequest(
 	const parsed = parseCompletionRequest(body);
 	if (!parsed.ok) {
 		return Response.json({ ok: false, error: parsed.error }, { status: 400 });
+	}
+
+	// Only validated requests that would reach OpenRouter consume quota.
+	const limit = await checkRateLimit(env.DB, user.id, Date.now());
+	if (!limit.ok) {
+		return Response.json(
+			{ ok: false, error: "Rate limit exceeded, try again later" },
+			{
+				status: 429,
+				headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) },
+			},
+		);
 	}
 
 	const completion = await requestCompletion(env, parsed.messages, {
@@ -62,6 +90,51 @@ export async function handleOpenRouterRequest(
 		model: completion.value.model,
 		message: completion.value.content,
 	});
+}
+
+/**
+ * Fixed-window per-user quota backed by the openrouter_limits table.
+ * Read-then-write races can over-admit by a call under concurrency; that
+ * fail-open direction is acceptable for spend protection at this scale.
+ */
+async function checkRateLimit(
+	db: D1Database,
+	userId: string,
+	now: number,
+): Promise<{ ok: true } | { ok: false; retryAfterMs: number }> {
+	const windowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
+	try {
+		const row = await db
+			.prepare(`SELECT window_start AS windowStart, count FROM openrouter_limits WHERE user_id = ?`)
+			.bind(userId)
+			.first<{ windowStart: number; count: number }>();
+
+		if (!row || row.windowStart !== windowStart) {
+			await db
+				.prepare(
+					`INSERT INTO openrouter_limits (user_id, window_start, count)
+					 VALUES (?, ?, 1)
+					 ON CONFLICT(user_id) DO UPDATE SET window_start = excluded.window_start, count = 1`,
+				)
+				.bind(userId, windowStart)
+				.run();
+			return { ok: true };
+		}
+
+		if (row.count >= MAX_GENERATES_PER_WINDOW) {
+			return { ok: false, retryAfterMs: windowStart + WINDOW_MS - now };
+		}
+
+		await db
+			.prepare(`UPDATE openrouter_limits SET count = count + 1 WHERE user_id = ?`)
+			.bind(userId)
+			.run();
+		return { ok: true };
+	} catch {
+		// Limiter is best-effort spend protection, not an auth boundary:
+		// a D1 failure must not break generate for legitimate users.
+		return { ok: true };
+	}
 }
 
 export async function requestCompletion(
