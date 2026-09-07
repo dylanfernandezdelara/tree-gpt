@@ -69,7 +69,7 @@ export type TurnRequest = {
 	userMessage?: { id: string; content: string };
 	/** Idempotency key for the assistant reply. Replay never regenerates. */
 	replyId: string;
-	/** Ignored unless :id is being created. */
+	/** Used only when a new chat row is created (parentId null, :id absent); ignored otherwise. */
 	title?: string;
 	/** True = SSE response (TurnStreamEvent). Absent = JSON TurnResponse. */
 	stream?: boolean;

@@ -17,7 +17,7 @@ Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). In 
 
 ## API
 
-All `/api/chats` and `/api/openrouter` routes require the Better Auth session cookie (`401 { "ok": false, "error": "Unauthorized" }` without one). Ids are client-minted (1–128 chars). Types live in `worker/tree-types.ts`. Messages are immutable tree nodes (`parentId` / `rootId` / `depth`); a chat is a named pointer to a leaf; the messages a pane shows are the root-to-leaf path. Fork = a second pointer into the same tree; redo = a sibling reply under the same user node. `leafId` is the chat's version (every turn moves it, rename does not) and is the CAS token for `/turns`. `generating` on a summary means the leaf is a pending reply younger than 120 s. Signed-in chats persist per user; guests keep chats in the browser.
+All `/api/chats` and `/api/openrouter` routes require the Better Auth session cookie (`401 { "ok": false, "error": "Unauthorized" }` without one). Ids are client-minted (1–128 chars). Types live in `worker/tree-types.ts`. Messages are immutable tree nodes (`parentId` / `rootId` / `depth`); a chat is a named pointer to a leaf; the messages a pane shows are the root-to-leaf path. Fork = a second pointer into the same tree; redo = a sibling reply under the same user node. `leafId` is the chat's version (every turn moves it, rename does not) and is the CAS token for `/turns`. `generating` on a summary means the leaf is a pending reply younger than 120 s. Signed-in chats persist per user; guests keep chats in the browser. Any unexpected throw on `/api/` (except `/api/auth`) returns `500 { "ok": false, "error": "Internal error" }`.
 
 ### Tree routes
 
@@ -68,7 +68,7 @@ Removes the pointer, then any nodes of that root no remaining chat reaches. A fo
 
 #### `POST /api/chats/:id/turns`
 
-The write primitive. `stream: true` → SSE once reserve succeeds; omit `stream` for JSON. Failures before the stream opens are JSON (never SSE). Persistence tees the upstream stream inside `ctx.waitUntil`, so aborting the fetch never loses the reply.
+The write primitive. `stream: true` → SSE once reserve succeeds; omit `stream` for JSON. Failures before the stream opens are JSON (never SSE). Persistence runs on a tee inside `ctx.waitUntil`, so a reply that finishes within ~30 s of the disconnect is still committed; a longer one is left pending and abandoned by the next write (the user message survives, quota was spent).
 
 Request (`TurnRequest`):
 
@@ -79,12 +79,12 @@ Request (`TurnRequest`):
   replyId: string;                   // idempotency key for the assistant row
   userMessage?: { id: string; content: string }; // omit = redo
   fork?: { chatId: string; title: string };      // land on a new pointer; :id untouched
-  title?: string;                    // create only
+  title?: string;                    // new chat only (`parentId: null` and `:id` absent)
   stream?: boolean;
 }
 ```
 
-**Send / create** — `parentId` is the current leaf (`null` to create; `:id` must not exist, or must be an empty chat). Optional `title` (whitespace-only becomes `"New chat"`).
+**Send / create** — `parentId` is the current leaf (`null` to create; `:id` must not exist, or must be an empty chat). `title` is used only when creating a new chat (`parentId: null` and `:id` does not exist; whitespace-only becomes `"New chat"`). It is ignored on an existing empty chat, append, redo, and fork (use `fork.title`).
 
 ```json
 {
@@ -125,7 +125,7 @@ Request (`TurnRequest`):
 }
 ```
 
-**Idempotency (`replyId`).** Lookup runs before quota. A completed `replyId` returns the same `200` without calling OpenRouter or charging quota. A pending `replyId` younger than 120 s → `409` `"Reply is still generating"`; older → the pending row is abandoned, then `409` `"Reply timed out"`. Never regenerates.
+**Idempotency (`replyId`).** Lookup runs before quota. A completed `replyId` returns the same `200` without calling OpenRouter or charging quota. A pending `replyId` younger than 120 s → `409` `"Reply is still generating"`; older → the pending row is abandoned, then `409` `"Reply timed out"`. Never regenerates. A reply that already completed can never be un-pointed by a late abandon. A completion that finds its row already abandoned (timed-out replay or a concurrent write) reports `409` `"Reply was abandoned before it finished"` instead of a false `done`.
 
 **CAS (`expectLeaf`).** Must match the chat's current `leafId`. Stale value → `409`, nothing written or charged. Reload (`GET /api/chats/:id`) and retry from the returned `chat.leafId`.
 
@@ -140,7 +140,7 @@ Request (`TurnRequest`):
 - `data: {"type":"content","text":"..."}` — one or more
 - exactly one terminal: `data: {"type":"done","chat":{...ChatSummary},"messages":[...ApiMessage]}` or `data: {"type":"error","error":"...","details"?:"..."}`
 
-The `done` event carries the committed chat and full path — replace local state with it.
+The `done` event carries the committed chat and full path — replace local state with it. If the pending reply was abandoned (timed-out replay or a concurrent write) before generation finished, the terminal is `data: {"type":"error","error":"Reply was abandoned before it finished"}` (JSON path → `409` with that string).
 
 ```
 :thinking
@@ -158,10 +158,10 @@ Status codes (JSON unless the stream already opened):
 - `401` `"Unauthorized"`
 - `404` `"Not found"` · `"Parent not found"`
 - `405` `"Use POST"`
-- `409` `"Chat changed, reload"` (includes `chat`) · `"Chat already exists"` (includes `chat`) · `"Fork target already exists"` (includes `chat` when owned) · `"Reply is still generating"` · `"Reply timed out"` · `"Parent reply is not finished"`
+- `409` `"Chat changed, reload"` (includes `chat`) · `"Chat already exists"` (includes `chat`) · `"Fork target already exists"` (includes `chat` when owned) · `"Reply is still generating"` · `"Reply timed out"` · `"Parent reply is not finished"` · `"Reply was abandoned before it finished"`
 - `429` `"Rate limit exceeded, try again later"` (`Retry-After` seconds)
-- `500` `"OPENROUTER_API_KEY is not set in .dev.vars"` · `"Reserve did not produce a reply parent"` · `"Reserved chat is missing"` · `"Unexpected terminal event"`
-- `502` `"OpenRouter returned <status>"` · `"OpenRouter returned an empty reply"` · `"Unexpected OpenRouter response shape"` · mid-stream `error` events: `"OpenRouter returned an error"` · `"Stream interrupted"` · `"OpenRouter returned an empty reply"` (JSON `502` when `stream` is absent)
+- `500` `"OPENROUTER_API_KEY is not set in .dev.vars"` · `"Reserved chat is missing"` · `"Internal error"`
+- `502` `"OpenRouter returned <status>"` · `"OpenRouter returned an empty reply"` · mid-stream `error` events: `"OpenRouter returned an error"` · `"Stream interrupted"` · `"OpenRouter returned an empty reply"` (JSON `502` when `stream` is absent)
 
 ### Frontend wiring notes
 
@@ -171,8 +171,9 @@ Status codes (JSON unless the stream already opened):
 - Redo: same route, `parentId` = the user node above the reply, no `userMessage`.
 - Fork: same as send (or redo) plus `fork: { chatId, title }` when the same chat is open in another pane (or when redoing a reply that is not the leaf).
 - On `409`, reload (`GET /api/chats/:id` or use the returned `chat`) and retry from the fresh `leafId`.
+- On `502` / SSE `error` for a send: the pending reply is removed and the user message is kept as the chat's leaf, so the next send uses `parentId = expectLeaf = <that user message id>`. On `429` nothing was written.
 - On SSE `done`, replace the pane's `chat` + `messages` with the payload.
-- Stop = abort the fetch. The server still commits the reply; then `GET /api/chats/:id`.
+- Stop: prefer keeping the fetch open and just stop rendering deltas (the invocation stays alive and the reply commits), or abort and accept that a slow reply may be lost; afterwards `GET /api/chats/:id`.
 - An in-flight assistant row on `GET /api/chats/:id` has `pending: true`.
 - SSE parsers must ignore `:thinking` comment frames (they are not `data:` lines).
 
@@ -180,8 +181,8 @@ Status codes (JSON unless the stream already opened):
 
 Unchanged shapes, used by the current UI. Slated for removal once the UI is on `/turns`.
 
-- `GET /api/chats` — full documents `{ chats: [{ id, title, createdAt, updatedAt, messages: [{ id, role, content, createdAt, reasoning? }] }] }` (pending rows omitted).
-- `PUT /api/chats/:id` — full-document replace, reconciled onto the tree (append / truncate / diverge / in-place edit). `409` `"Chat is generating"` if the leaf is a fresh pending reply; `409` `"Message is shared with another chat and cannot be edited here"` when editing a node another chat shares. Array cap 80 (maps to depth < 80). Does not enforce the per-root 400 cap.
+- `GET /api/chats` — full documents `{ chats: [{ id, title, createdAt, updatedAt, messages: [{ id, role, content, createdAt, reasoning? }] }] }` (pending rows omitted). Non-GET → `405` `"Use GET"`.
+- `PUT /api/chats/:id` — full-document replace, reconciled onto the tree (append / truncate / diverge / in-place edit). Compare-and-swaps the chat's leaf on every reconcile statement: a concurrent `/turns` write returns `409` `"Chat changed, reload"` and writes nothing. `409` `"Chat is generating"` if the leaf is a fresh pending reply; `409` `"Message is shared with another chat and cannot be edited here"` when editing a node another chat shares. Array cap 80 (maps to depth < 80). Does not enforce the per-root 400 cap.
 - `POST /api/openrouter` — `{ message, messages: [{ role, content }], stream? }` → `{ ok, model, message }`, or SSE `{ type: "reasoning" | "content", text }` / `{ type: "done", model }` / `{ type: "error", error }`. Legacy `reasoningDetails` blobs are accepted and dropped. Display-only `reasoning` is never sent upstream.
 
 ### Limits
