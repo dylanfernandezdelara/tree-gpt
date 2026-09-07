@@ -19,6 +19,19 @@
 	},
 	"upload_source_maps": true,
 	"secrets": {
-		"required": ["OPENROUTER_API_KEY"],
+		"required": [
+			"OPENROUTER_API_KEY",
+			"GITHUB_CLIENT_ID",
+			"GITHUB_CLIENT_SECRET",
+			"BETTER_AUTH_SECRET",
+		],
 	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "treegpt",
+			"database_id": "418e139e-8680-4979-aad2-9a40ed5a9aa6",
+			"migrations_dir": "migrations",
+		},
+	],
 }

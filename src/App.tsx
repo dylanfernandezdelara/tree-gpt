@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { AuthBar } from "./AuthBar";
 
 type ChatResponse =
 	| { ok: true; model: string; message: string }
@@ -37,6 +38,7 @@ function App() {
 	return (
 		<main>
 			<h1>treeGPT</h1>
+			<AuthBar />
 			<form onSubmit={onSubmit}>
 				<input
 					type="text"

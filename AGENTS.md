@@ -2,7 +2,22 @@
 
 ## Local development
 
-Copy `.dev.vars.example` to `.dev.vars` and set `OPENROUTER_API_KEY`. Then run `npm run dev` — that starts the Vite frontend and the Cloudflare Worker together at http://localhost:5173.
+Copy `.dev.vars.example` to `.dev.vars` and set:
+
+- `OPENROUTER_API_KEY`
+- `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from a GitHub OAuth App (not a GitHub App)
+- `BETTER_AUTH_SECRET` — random, at least 32 characters (`openssl rand -base64 32`)
+
+GitHub OAuth callback for local: `http://localhost:5173/api/auth/callback/github`. Add the same path on each `workers.dev` or preview origin you use.
+
+Apply D1 migrations, then start the Vite frontend and Cloudflare Worker together at http://localhost:5173:
+
+```bash
+npm run db:migrate:local
+npm run dev
+```
+
+Use `localhost`, not `127.0.0.1`, so passkeys match the WebAuthn rpID.
 
 ## Models
 

@@ -1,9 +1,15 @@
+import { handleAuthRequest } from "./auth.js";
+
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const FREE_MODEL = "openrouter/free";
 
 export default {
 	async fetch(request, env) {
 		const url = new URL(request.url);
+
+		if (url.pathname.startsWith("/api/auth")) {
+			return handleAuthRequest(request, env);
+		}
 
 		if (url.pathname === "/api/openrouter") {
 			return chatOpenRouter(request, env);
