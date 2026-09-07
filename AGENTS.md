@@ -30,6 +30,6 @@ Use `localhost`, not `127.0.0.1`.
 
 Default model for all OpenRouter chat completions: `meta/muse-spark-1.3-contributor` (Muse Spark 1.3 contributor tier).
 
-There is no separate instant/thinking slug. Instant-like replies use `reasoning: { effort: "minimal" }` (shortest pass Muse supports; `none` returns HTTP 400). Keep `max_tokens` at 4096. Preserve each assistant turn's `reasoning_details` unmodified on later calls.
+There is no separate instant/thinking slug. Instant-like replies use `reasoning: { effort: "minimal", exclude: true }` (shortest pass Muse supports; `none` returns HTTP 400). `exclude` only hides the reasoning trace from the response — the model still reasons. Keep `max_tokens` at 4096. Never store or echo `reasoning_details`: plain chat sends no `tools`, so there is no tool-use continuity to preserve, and replaying old thinking only slows later replies. Accept-and-drop legacy blobs from old clients instead of rejecting them.
 
 Do not switch models unless we explicitly ask.
