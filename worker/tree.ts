@@ -183,8 +183,8 @@ export function summaryFor(chat: ChatRow, leaf: LeafState | null, now: number): 
 
 /**
  * Invariant: true iff `nodeId` lies on the path of some chat of this user
- * other than `excludingChatId`. Used by the compat PUT to decide between an
- * in-place edit and a sibling branch.
+ * other than `excludingChatId`. Used by the compat PUT to refuse in-place
+ * edits of nodes another chat also renders.
  */
 export async function isShared(
 	db: D1Database,

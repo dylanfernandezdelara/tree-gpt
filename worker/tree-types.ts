@@ -82,7 +82,7 @@ export type TurnResponse =
 /**
  * SSE payloads for `stream: true`, in order: zero or more reasoning/content
  * deltas, then exactly one terminal `done` or `error`. Every failure before
- * the stream opens (400/404/409/429/502) is a JSON TurnResponse instead.
+ * the stream opens (400/401/404/409/429/500/502) is a JSON TurnResponse.
  */
 export type TurnStreamEvent =
 	| { type: "reasoning"; text: string }
