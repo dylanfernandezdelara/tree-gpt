@@ -40,6 +40,7 @@ import {
 	loadLayout,
 	loadLineage,
 	loadLocalChats,
+	loadModelEfforts,
 	loadSelectedModel,
 	loadSidebarOpen,
 	loadSidebarTree,
@@ -50,6 +51,7 @@ import {
 	saveLayout,
 	saveLineage,
 	saveLocalChats,
+	saveModelEffort,
 	saveSelectedModel,
 	saveSidebarOpen,
 	saveSidebarTree,
@@ -57,7 +59,7 @@ import {
 	type SidebarTree,
 } from "./lib/storage";
 import type { Bookmark, Chat, ForkOrigin, Message } from "./types";
-import type { ModelId } from "../worker/tree-types";
+import type { EffortId, ModelId } from "../worker/tree-types";
 
 const SYNC_DEBOUNCE_MS = 500;
 const NO_CHATS: Chat[] = [];
@@ -131,8 +133,12 @@ function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
 	const [model, setModel] = useState(loadSelectedModel);
-	/** Model locked to each chat at its first send. Fresh chats use the global preference. */
-	const [chatModels, setChatModels] = useState<Record<string, ModelId>>({});
+	/** Reasoning effort per model. Each model remembers its own setting. */
+	const [efforts, setEfforts] = useState(loadModelEfforts);
+	/** Model + effort locked to each chat at its first send. Fresh chats use the preferences. */
+	const [chatLocks, setChatLocks] = useState<Record<string, { model: ModelId; effort: EffortId }>>(
+		{},
+	);
 	/** Composer text per pane id. */
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	/** Chats with a reply in flight (one request per chat; chats run concurrently). */
@@ -469,16 +475,26 @@ function ChatApp({ user }: { user: AuthUser }) {
 		setDrafts((prev) => ({ ...prev, [paneId]: value }));
 	}
 
-	function modelFor(chatId: string): ModelId {
-		return chatModels[chatId] ?? model;
+	function configFor(chatId: string): { model: ModelId; effort: EffortId } {
+		return chatLocks[chatId] ?? { model, effort: efforts[model] };
 	}
 
 	/** First send wins: later calls for the same chat are no-ops. */
-	function lockModel(chatId: string, value: ModelId): void {
-		setChatModels((prev) => (prev[chatId] === undefined ? { ...prev, [chatId]: value } : prev));
+	function lockConfig(chatId: string, value: { model: ModelId; effort: EffortId }): void {
+		setChatLocks((prev) => (prev[chatId] === undefined ? { ...prev, [chatId]: value } : prev));
 	}
 
-	async function request(chatId: string, replyId: string, history: ChatTurn[], requestModel: typeof model) {
+	function changeEffort(effort: EffortId): void {
+		saveModelEffort(model, effort);
+		setEfforts((prev) => ({ ...prev, [model]: effort }));
+	}
+
+	async function request(
+		chatId: string,
+		replyId: string,
+		history: ChatTurn[],
+		config: { model: ModelId; effort: EffortId },
+	) {
 		pendingRef.current.get(chatId)?.abort();
 		const controller = new AbortController();
 		pendingRef.current.set(chatId, controller);
@@ -499,7 +515,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 		};
 		try {
 			const result = await sendChatStream(history, controller.signal, applyUpdate, {
-				model: requestModel,
+				model: config.model,
+				effort: config.effort,
 			});
 			if (result.ok && content.trim()) {
 				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
@@ -573,8 +590,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 
 		if (chat && (shared || anchor)) {
 			// A fork continues the same conversation, so it inherits the
-			// source chat's locked model rather than the global preference.
-			const sendModel = modelFor(chat.id);
+			// source chat's locked config rather than the preferences.
+			const config = configFor(chat.id);
 			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
 			const carried = copyMessages(chat.messages);
 			// A thread diverges at the highlighted message; a plain branch at the
@@ -600,7 +617,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 				origin,
 			};
 			clearThread(paneId);
-			lockModel(branched.id, sendModel);
+			lockConfig(branched.id, config);
 			updateStore((prev) => {
 				const chats = [branched, ...prev.chats];
 				saveLineage(prev.ns, { ...loadLineage(prev.ns), [branched.id]: origin });
@@ -610,17 +627,17 @@ function ChatApp({ user }: { user: AuthUser }) {
 					chats,
 				};
 			});
-			void request(branched.id, reply.id, history, sendModel);
+			void request(branched.id, reply.id, history, config);
 		} else if (chat) {
-			const sendModel = modelFor(chat.id);
-			lockModel(chat.id, sendModel);
+			const config = configFor(chat.id);
+			lockConfig(chat.id, config);
 			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
 			updateChat(chat.id, (current) => ({
 				...current,
 				updatedAt: now,
 				messages: [...current.messages, userMessage, reply],
 			}));
-			void request(chat.id, reply.id, history, sendModel);
+			void request(chat.id, reply.id, history, config);
 		} else {
 			const created: Chat = {
 				id: newId(),
@@ -629,12 +646,13 @@ function ChatApp({ user }: { user: AuthUser }) {
 				createdAt: now,
 				updatedAt: now,
 			};
-			lockModel(created.id, model);
+			const config = { model, effort: efforts[model] };
+			lockConfig(created.id, config);
 			updateStore((prev) => ({
 				...withLayout(prev, setPaneChat(layoutOf(prev) ?? prev.layout, paneId, created.id)),
 				chats: [created, ...prev.chats],
 			}));
-			void request(created.id, reply.id, [{ role: "user", content }], model);
+			void request(created.id, reply.id, [{ role: "user", content }], config);
 		}
 	}
 
@@ -656,15 +674,15 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (history.length === 0) {
 			return;
 		}
-		const sendModel = modelFor(chat.id);
-		lockModel(chat.id, sendModel);
+		const config = configFor(chat.id);
+		lockConfig(chat.id, config);
 		setReply(chat.id, messageId, {
 			content: "",
 			pending: true,
 			error: false,
 			reasoning: undefined,
 		});
-		void request(chat.id, messageId, history, sendModel);
+		void request(chat.id, messageId, history, config);
 	}
 
 	function stop(paneId: string) {
@@ -822,6 +840,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 				busy={streaming}
 				model={model}
 				onModelChange={setModel}
+				effort={efforts[model]}
+				onEffortChange={changeEffort}
 				// The bookmarks screen holds one window, so nothing there accepts a drag.
 				ability={
 					view === "chats" && activeLayout ? dropAbility(activeLayout, pane.id, drag) : NO_DROPS

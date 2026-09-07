@@ -876,7 +876,12 @@ describe("handleTurnRequest", () => {
 			db,
 			"user-1",
 			"chat-1",
-			{ ...appendBody, stream: false, model: "meta/muse-spark-1.3-contributor" },
+			{
+				...appendBody,
+				stream: false,
+				model: "meta/muse-spark-1.3-contributor",
+				effort: "minimal",
+			},
 			1_000,
 		);
 		expect(planned.ok).toBe(true);
@@ -938,43 +943,66 @@ describe("handleTurnRequest", () => {
 		expect(upstream.reasoning).toEqual({ effort: "minimal" });
 	});
 
-	it("forwards each selected turn model with its streaming reasoning shape", async () => {
-		const cases = [
-			{ model: "openai/gpt-5.6-luna", reasoning: { effort: "none" } },
-			{ model: "qwen/qwen3.7-flash", reasoning: { max_tokens: 512 } },
-		] as const;
-		for (const { model, reasoning } of cases) {
-			fetchMock.mockReset();
-			fetchMock.mockResolvedValue(fixtureResponse());
-			const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
-			const { db } = makeDb({
-				first: firstFor({
-					chats,
-					messages: { a1: parentLeaf, u1: userParent },
-				}),
-				all: async () => ({ results: pathMessages }),
-				batch: async (stmts) => {
-					chats["chat-1"] = { ...sourceChat, leaf_id: "a2" };
-					return stmts.map(() => ({ meta: { changes: 1 } }));
-				},
-			});
-			const { ctx, promises } = makeCtx();
-			const response = await handleTurnRequest(
-				turnRequest("chat-1", { ...appendBody, model }),
-				envWith(db),
-				ctx,
-				"chat-1",
-			);
-			await Promise.all(promises);
-			expect(response.status).toBe(200);
-			const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
-				string,
-				unknown
-			>;
-			expect(upstream.model).toBe(model);
-			expect(upstream.max_tokens).toBe(4096);
-			expect(upstream.reasoning).toEqual(reasoning);
-		}
+	it("rejects turn efforts the model does not offer without side effects", async () => {
+		const { db, statements } = makeDb({
+			first: firstFor({
+				chats: { "chat-1": sourceChat },
+				messages: { a1: parentLeaf },
+			}),
+		});
+		const { ctx } = makeCtx();
+		const response = await handleTurnRequest(
+			turnRequest("chat-1", {
+				...appendBody,
+				model: "meta/muse-spark-1.3-contributor",
+				effort: "none",
+			}),
+			envWith(db),
+			ctx,
+			"chat-1",
+		);
+		expect(response.status).toBe(400);
+		const body = (await response.json()) as { error: string };
+		expect(body.error).toBe("effort is not supported by this model");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(statements.some((s) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(s.sql))).toBe(false);
+	});
+
+	it("forwards the selected turn model and effort", async () => {
+		fetchMock.mockReset();
+		fetchMock.mockResolvedValue(fixtureResponse());
+		const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
+		const { db } = makeDb({
+			first: firstFor({
+				chats,
+				messages: { a1: parentLeaf, u1: userParent },
+			}),
+			all: async () => ({ results: pathMessages }),
+			batch: async (stmts) => {
+				chats["chat-1"] = { ...sourceChat, leaf_id: "a2" };
+				return stmts.map(() => ({ meta: { changes: 1 } }));
+			},
+		});
+		const { ctx, promises } = makeCtx();
+		const response = await handleTurnRequest(
+			turnRequest("chat-1", {
+				...appendBody,
+				model: "openai/gpt-5.6-luna",
+				effort: "low",
+			}),
+			envWith(db),
+			ctx,
+			"chat-1",
+		);
+		await Promise.all(promises);
+		expect(response.status).toBe(200);
+		const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(upstream.model).toBe("openai/gpt-5.6-luna");
+		expect(upstream.max_tokens).toBe(4096);
+		expect(upstream.reasoning).toEqual({ effort: "low" });
 	});
 });
 

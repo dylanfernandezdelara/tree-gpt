@@ -334,7 +334,7 @@ describe("model allowlist", () => {
 		});
 	}
 
-	it("defaults omitted model to Muse Spark", async () => {
+	it("defaults omitted model and effort to Muse Spark minimal", async () => {
 		fetchMock.mockResolvedValue(upstreamOk(chatPayload("hello")));
 		const response = await handleOpenRouterRequest(post({ message: "hi" }), env());
 		expect(response.status).toBe(200);
@@ -346,25 +346,40 @@ describe("model allowlist", () => {
 		expect(upstream.reasoning).toEqual({ effort: "minimal", exclude: true });
 	});
 
-	it("sends each allowed model with its low-cost reasoning shape", async () => {
+	it("defaults omitted effort per model", async () => {
+		fetchMock.mockResolvedValue(upstreamOk(chatPayload("hello")));
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi", model: "openai/gpt-5.6-luna" }),
+			env(),
+		);
+		expect(response.status).toBe(200);
+		const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(upstream.model).toBe("openai/gpt-5.6-luna");
+		expect(upstream.reasoning).toEqual({ effort: "none", exclude: true });
+	});
+
+	it("forwards each supported (model, effort) pair", async () => {
 		const cases = [
-			{
-				model: "meta/muse-spark-1.3-contributor",
-				reasoning: { effort: "minimal", exclude: true },
-			},
-			{ model: "openai/gpt-5.6-luna", reasoning: { effort: "none", exclude: true } },
-			{ model: "qwen/qwen3.7-flash", reasoning: { max_tokens: 512, exclude: true } },
+			{ model: "meta/muse-spark-1.3-contributor", effort: "minimal" },
+			{ model: "meta/muse-spark-1.3-contributor", effort: "high" },
+			{ model: "meta/muse-spark-1.3-contributor", effort: "xhigh" },
+			{ model: "openai/gpt-5.6-luna", effort: "none" },
+			{ model: "openai/gpt-5.6-luna", effort: "medium" },
+			{ model: "openai/gpt-5.6-luna", effort: "max" },
 		] as const;
-		for (const { model, reasoning } of cases) {
+		for (const { model, effort } of cases) {
 			fetchMock.mockResolvedValueOnce(upstreamOk({ ...chatPayload("hello"), model }));
-			const response = await handleOpenRouterRequest(post({ message: "hi", model }), env());
+			const response = await handleOpenRouterRequest(post({ message: "hi", model, effort }), env());
 			expect(response.status).toBe(200);
 			const upstream = JSON.parse(
 				String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1]?.body),
 			) as Record<string, unknown>;
 			expect(upstream.model).toBe(model);
 			expect(upstream.max_tokens).toBe(4096);
-			expect(upstream.reasoning).toEqual(reasoning);
+			expect(upstream.reasoning).toEqual({ effort, exclude: true });
 		}
 	});
 
@@ -381,43 +396,61 @@ describe("model allowlist", () => {
 		expect(db.prepare).not.toHaveBeenCalled();
 	});
 
-	it("propagates the selected model through the streaming path", async () => {
-		const cases = [
-			{
-				model: "openai/gpt-5.6-luna",
-				reasoning: { effort: "none" },
-			},
-			{
-				model: "qwen/qwen3.7-flash",
-				reasoning: { max_tokens: 512 },
-			},
-		] as const;
-		for (const { model, reasoning } of cases) {
-			// No "model" in upstream frames: the terminal must fall back to
-			// the requested model, not the Muse default.
-			fetchMock.mockResolvedValueOnce(
-				new Response(
-					`data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n` + `data: [DONE]\n\n`,
-					{ status: 200 },
-				),
-			);
-			const response = await handleOpenRouterRequest(
-				post({ message: "hi", model, stream: true }),
-				env(),
-			);
-			expect(response.status).toBe(200);
-			const upstream = JSON.parse(
-				String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1]?.body),
-			) as Record<string, unknown>;
-			expect(upstream.model).toBe(model);
-			expect(upstream.stream).toBe(true);
-			expect(upstream.reasoning).toEqual(reasoning);
-			expect("exclude" in (upstream.reasoning as Record<string, unknown>)).toBe(false);
-			const events = String(await response.text())
-				.split("\n\n")
-				.filter((frame) => frame.startsWith("data:"))
-				.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
-			expect(events[events.length - 1]).toEqual({ type: "done", model });
+	it("rejects unknown efforts before quota or upstream work", async () => {
+		const { db } = rateLimitDb();
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi", effort: "ultra" }),
+			env({ DB: db }),
+		);
+		expect(response.status).toBe(400);
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body.error).toBe("effort is not supported");
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(db.prepare).not.toHaveBeenCalled();
+	});
+
+	it("rejects efforts the selected model does not offer", async () => {
+		for (const body of [
+			{ message: "hi", model: "meta/muse-spark-1.3-contributor", effort: "none" },
+			// The catalog lists max for Muse, but Meta's provider rejects it.
+			{ message: "hi", model: "meta/muse-spark-1.3-contributor", effort: "max" },
+			{ message: "hi", model: "openai/gpt-5.6-luna", effort: "minimal" },
+		]) {
+			const { db } = rateLimitDb();
+			const response = await handleOpenRouterRequest(post(body), env({ DB: db }));
+			expect(response.status).toBe(400);
+			const parsed = (await response.json()) as Record<string, unknown>;
+			expect(parsed.error).toBe("effort is not supported by this model");
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(db.prepare).not.toHaveBeenCalled();
 		}
+	});
+
+	it("propagates the selected model and effort through the streaming path", async () => {
+		// No "model" in upstream frames: the terminal must fall back to
+		// the requested model, not the Muse default.
+		fetchMock.mockResolvedValueOnce(
+			new Response(
+				`data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n` + `data: [DONE]\n\n`,
+				{ status: 200 },
+			),
+		);
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi", model: "openai/gpt-5.6-luna", effort: "high", stream: true }),
+			env(),
+		);
+		expect(response.status).toBe(200);
+		const upstream = JSON.parse(
+			String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[1]?.body),
+		) as Record<string, unknown>;
+		expect(upstream.model).toBe("openai/gpt-5.6-luna");
+		expect(upstream.stream).toBe(true);
+		expect(upstream.reasoning).toEqual({ effort: "high" });
+		expect("exclude" in (upstream.reasoning as Record<string, unknown>)).toBe(false);
+		const events = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
+		expect(events[events.length - 1]).toEqual({ type: "done", model: "openai/gpt-5.6-luna" });
 	});
 });

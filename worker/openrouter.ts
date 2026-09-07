@@ -1,5 +1,14 @@
 import { getSessionUser } from "./auth.js";
-import { DEFAULT_MODEL, isModelId, isRole, type ModelId } from "./tree-types.js";
+import {
+	DEFAULT_EFFORT,
+	DEFAULT_MODEL,
+	MODEL_EFFORTS,
+	isEffortId,
+	isModelId,
+	isRole,
+	type EffortId,
+	type ModelId,
+} from "./tree-types.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -69,12 +78,14 @@ export async function handleOpenRouterRequest(
 		return requestStreamCompletion(env, parsed.messages, {
 			origin: new URL(request.url).origin,
 			model: parsed.model,
+			effort: parsed.effort,
 		});
 	}
 
 	const completion = await requestCompletion(env, parsed.messages, {
 		origin: new URL(request.url).origin,
 		model: parsed.model,
+		effort: parsed.effort,
 	});
 	if (!completion.ok) {
 		return Response.json(
@@ -139,28 +150,25 @@ export async function checkRateLimit(
 	}
 }
 
-export type CompletionOptions = { sessionId?: string; origin?: string; model?: ModelId };
+export type CompletionOptions = {
+	sessionId?: string;
+	origin?: string;
+	model?: ModelId;
+	effort?: EffortId;
+};
 
 /**
- * Model-compatible low-cost reasoning settings (live catalog, Sep 2026).
- * Muse reasoning is mandatory with `minimal` in supported_efforts, so that
- * is the fastest legal setting. Luna lists `none` in supported_efforts with
- * reasoning optional, so disable it outright. Qwen exposes no effort levels
- * but supports `max_tokens`, so use a small explicit token budget.
+ * Reasoning settings for an explicit (model, effort) pair. Both models take
+ * plain `effort` levels; only the valid sets differ (see MODEL_EFFORTS).
+ * Callers must validate first — this maps, it does not check.
  */
 export function reasoningFor(
 	model: ModelId,
 	stream: boolean,
+	effort?: EffortId,
 ): Record<string, string | number | boolean> {
 	const exclude: Record<string, boolean> = stream ? {} : { exclude: true };
-	switch (model) {
-		case "openai/gpt-5.6-luna":
-			return { effort: "none", ...exclude };
-		case "qwen/qwen3.7-flash":
-			return { max_tokens: 512, ...exclude };
-		default:
-			return { effort: "minimal", ...exclude };
-	}
+	return { effort: effort ?? DEFAULT_EFFORT[model], ...exclude };
 }
 
 export async function requestCompletion(
@@ -197,7 +205,7 @@ export async function requestCompletion(
 		// `exclude` is part of the unified reasoning object all OpenRouter
 		// models accept.
 		max_tokens: 4096,
-		reasoning: reasoningFor(model, false),
+		reasoning: reasoningFor(model, false, options?.effort),
 	};
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
@@ -305,7 +313,7 @@ export async function openStreamCompletion(
 			model,
 			messages: toOpenRouterMessages(messages),
 			max_tokens: 4096,
-			reasoning: reasoningFor(model, true),
+			reasoning: reasoningFor(model, true, options?.effort),
 			stream: true,
 			...(options?.sessionId ? { session_id: options.sessionId } : {}),
 		}),
@@ -548,7 +556,7 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 function parseCompletionRequest(
 	body: unknown,
 ):
-	| { ok: true; messages: CompletionMessage[]; stream: boolean; model: ModelId }
+	| { ok: true; messages: CompletionMessage[]; stream: boolean; model: ModelId; effort: EffortId }
 	| { ok: false; error: string } {
 	if (typeof body !== "object" || body === null) {
 		return { ok: false, error: "Invalid JSON body" };
@@ -576,8 +584,19 @@ function parseCompletionRequest(
 		model = body.model;
 	}
 
+	let effort: EffortId = DEFAULT_EFFORT[model];
+	if ("effort" in body && body.effort !== undefined) {
+		if (!isEffortId(body.effort)) {
+			return { ok: false, error: "effort is not supported" };
+		}
+		if (!MODEL_EFFORTS[model].includes(body.effort)) {
+			return { ok: false, error: "effort is not supported by this model" };
+		}
+		effort = body.effort;
+	}
+
 	if (!("messages" in body) || body.messages === undefined) {
-		return { ok: true, messages: [{ role: "user", content: message }], stream, model };
+		return { ok: true, messages: [{ role: "user", content: message }], stream, model, effort };
 	}
 
 	const history = parseMessages(body.messages);
@@ -586,10 +605,10 @@ function parseCompletionRequest(
 	}
 
 	if (history.messages.length === 0) {
-		return { ok: true, messages: [{ role: "user", content: message }], stream, model };
+		return { ok: true, messages: [{ role: "user", content: message }], stream, model, effort };
 	}
 
-	return { ok: true, messages: history.messages, stream, model };
+	return { ok: true, messages: history.messages, stream, model, effort };
 }
 
 function parseMessages(

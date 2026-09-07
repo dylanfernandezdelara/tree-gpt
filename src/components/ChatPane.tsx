@@ -12,11 +12,12 @@ import {
 import type { Chat } from "../types";
 import { ChatThread } from "./ChatThread";
 import { Composer } from "./Composer";
+import { EffortSelector } from "./EffortSelector";
 import { EmptyState } from "./EmptyState";
 import { IconButton } from "./IconButton";
 import { CloseIcon } from "./Icons";
 import { ModelSelector } from "./ModelSelector";
-import type { ModelId } from "../../worker/tree-types";
+import type { EffortId, ModelId } from "../../worker/tree-types";
 
 /** Where a drop would land: an edge or middle of the body, or the header. */
 type DropTarget = DropSide | "swap";
@@ -33,6 +34,9 @@ type Props = {
 	/** Global model preference, rendered below this pane's composer. */
 	model: ModelId;
 	onModelChange: (model: ModelId) => void;
+	/** Effort for the selected model, locked with it at the chat's first send. */
+	effort: EffortId;
+	onEffortChange: (effort: EffortId) => void;
 	/** What this pane accepts from the drag in progress. */
 	ability: DropAbility;
 	/** This pane is the one being dragged. */
@@ -77,6 +81,8 @@ export function ChatPane({
 	busy,
 	model,
 	onModelChange,
+	effort,
+	onEffortChange,
 	ability,
 	dragging,
 	dropEffect,
@@ -310,7 +316,10 @@ export function ChatPane({
 				<EmptyState>
 					<div className="composer-stack">
 						{composer}
-						<ModelSelector value={model} onChange={onModelChange} />
+						<div className="picker-row">
+							<ModelSelector value={model} onChange={onModelChange} />
+							<EffortSelector model={model} value={effort} onChange={onEffortChange} />
+						</div>
 					</div>
 				</EmptyState>
 			)}

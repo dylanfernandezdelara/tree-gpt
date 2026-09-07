@@ -19,12 +19,10 @@ export type Role = "user" | "assistant";
  * Prices are per million tokens (live OpenRouter catalog, Sep 2026):
  * - Muse Spark 1.3 Contributor: $0.10 in / $0.20 out (default)
  * - GPT-5.6 Luna: $0.20 in / $1.20 out
- * - Qwen3.7 Flash: $0.03 in / $0.13 out, 1M context
  */
 export const CHAT_MODELS = [
-	{ id: "meta/muse-spark-1.3-contributor", label: "Muse Spark" },
+	{ id: "meta/muse-spark-1.3-contributor", label: "Muse Spark 1.3" },
 	{ id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna" },
-	{ id: "qwen/qwen3.7-flash", label: "Qwen3.7 Flash" },
 ] as const;
 
 export type ModelId = (typeof CHAT_MODELS)[number]["id"];
@@ -35,6 +33,46 @@ export function isModelId(value: unknown): value is ModelId {
 	return (
 		typeof value === "string" && CHAT_MODELS.some((model) => model.id === value)
 	);
+}
+
+/**
+ * User-selectable reasoning efforts, verified live against the providers
+ * (Sep 2026) — not just the catalog. Muse is mandatory-reasoning over
+ * minimal..xhigh (`none` 400s; the catalog also lists `max` but Meta's
+ * provider rejects it with "supported values: [minimal, low, medium, high,
+ * xhigh]"). Luna takes none..max in full (`minimal` is not a Luna level).
+ * `none` (labeled Off) disables reasoning where offered.
+ */
+export const EFFORTS = [
+	{ id: "none", label: "Off" },
+	{ id: "minimal", label: "Minimal" },
+	{ id: "low", label: "Low" },
+	{ id: "medium", label: "Medium" },
+	{ id: "high", label: "High" },
+	{ id: "xhigh", label: "XHigh" },
+	{ id: "max", label: "Max" },
+] as const;
+
+export type EffortId = (typeof EFFORTS)[number]["id"];
+
+export const MODEL_EFFORTS: Record<ModelId, readonly EffortId[]> = {
+	"meta/muse-spark-1.3-contributor": ["minimal", "low", "medium", "high", "xhigh"],
+	"openai/gpt-5.6-luna": ["none", "low", "medium", "high", "xhigh", "max"],
+};
+
+export const DEFAULT_EFFORT: Record<ModelId, EffortId> = {
+	"meta/muse-spark-1.3-contributor": "minimal",
+	"openai/gpt-5.6-luna": "none",
+};
+
+export function isEffortId(value: unknown): value is EffortId {
+	return (
+		typeof value === "string" && EFFORTS.some((effort) => effort.id === value)
+	);
+}
+
+export function effortLabel(id: EffortId): string {
+	return EFFORTS.find((effort) => effort.id === id)?.label ?? id;
 }
 
 /** Branch pointers per user. */
@@ -99,8 +137,10 @@ export type TurnRequest = {
 	title?: string;
 	/** True = SSE response (TurnStreamEvent). Absent = JSON TurnResponse. */
 	stream?: boolean;
-	/** Allowlisted model id. Omitted = DEFAULT_MODEL (Muse Spark). */
+	/** Allowlisted model id. Omitted = DEFAULT_MODEL (Muse Spark 1.3). */
 	model?: ModelId;
+	/** Reasoning effort. Must be in MODEL_EFFORTS[model]; omitted = DEFAULT_EFFORT[model]. */
+	effort?: EffortId;
 };
 
 export type TurnResponse =
