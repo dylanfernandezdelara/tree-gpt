@@ -103,7 +103,7 @@ export async function handleOpenRouterRequest(
  * Read-then-write races can over-admit by a call under concurrency; that
  * fail-open direction is acceptable for spend protection at this scale.
  */
-async function checkRateLimit(
+export async function checkRateLimit(
 	db: D1Database,
 	userId: string,
 	now: number,
@@ -241,19 +241,33 @@ export type StreamEvent =
 	| { type: "done"; model: string }
 	| { type: "error"; error: string };
 
+/**
+ * What translateStream yields: client events plus keep-alive heartbeats.
+ * Heartbeats exist only so encodeSse can keep the connection warm through
+ * long encrypted-reasoning stretches; object consumers ignore them.
+ */
+export type UpstreamEvent = StreamEvent | { type: "heartbeat" };
+
 /** Safety cap: the trace is display-only, never echoed, so bound it. */
 const MAX_STREAM_REASONING_CHARS = 8_000;
 
-export async function requestStreamCompletion(
+/**
+ * Starts a streaming completion and returns the translated event objects.
+ * Callers that need SSE bytes pipe through encodeSse(); callers that need to
+ * observe the reply (persist it) consume the objects directly.
+ */
+export async function openStreamCompletion(
 	env: Env,
 	messages: readonly CompletionMessage[],
 	options?: { sessionId?: string; origin?: string },
-): Promise<Response> {
+): Promise<
+	{ ok: true; events: ReadableStream<UpstreamEvent> } | { ok: false; error: CompletionFailure }
+> {
 	if (!env.OPENROUTER_API_KEY) {
-		return Response.json(
-			{ ok: false, error: "OPENROUTER_API_KEY is not set in .dev.vars" },
-			{ status: 500 },
-		);
+		return {
+			ok: false,
+			error: { status: 500, message: "OPENROUTER_API_KEY is not set in .dev.vars" },
+		};
 	}
 
 	// Streaming wants the trace (no `exclude`) so the UI can show thinking
@@ -279,18 +293,51 @@ export async function requestStreamCompletion(
 
 	if (!upstream.ok || !upstream.body) {
 		const details = (await upstream.text()).slice(0, 500);
-		return Response.json(
-			{ ok: false, error: `OpenRouter returned ${upstream.status}`, details },
-			{ status: 502 },
-		);
+		return {
+			ok: false,
+			error: { status: 502, message: `OpenRouter returned ${upstream.status}`, details },
+		};
 	}
 
-	const stream = translateStream(upstream.body);
-	return new Response(stream, {
+	return { ok: true, events: translateStream(upstream.body) };
+}
+
+export async function requestStreamCompletion(
+	env: Env,
+	messages: readonly CompletionMessage[],
+	options?: { sessionId?: string; origin?: string },
+): Promise<Response> {
+	const opened = await openStreamCompletion(env, messages, options);
+	if (!opened.ok) {
+		return Response.json(
+			{ ok: false, error: opened.error.message, details: opened.error.details },
+			{ status: opened.error.status },
+		);
+	}
+	return sseResponse(opened.events);
+}
+
+/** Wraps an event object stream as a text/event-stream Response. */
+export function sseResponse(events: ReadableStream<UpstreamEvent>): Response {
+	return new Response(events.pipeThrough(encodeSse()), {
 		headers: {
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",
+		},
+	});
+}
+
+/** Event objects → SSE bytes. Heartbeats become comment frames. */
+export function encodeSse<T extends { type: string }>(): TransformStream<T, Uint8Array> {
+	const encoder = new TextEncoder();
+	return new TransformStream<T, Uint8Array>({
+		transform(event, controller) {
+			if (event.type === "heartbeat") {
+				controller.enqueue(encoder.encode(`:thinking\n\n`));
+				return;
+			}
+			controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
 		},
 	});
 }
@@ -300,8 +347,7 @@ export async function requestStreamCompletion(
  * `reasoning_details` deltas become display-only `reasoning` text: they are
  * never stored server-side and never echoed on later turns.
  */
-function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-	const encoder = new TextEncoder();
+function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<UpstreamEvent> {
 	const decoder = new TextDecoder();
 	const reader = upstream.getReader();
 	let buffer = "";
@@ -309,25 +355,23 @@ function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<U
 	let reasoningSent = 0;
 	let finished = false;
 
-	return new ReadableStream<Uint8Array>({
+	return new ReadableStream<UpstreamEvent>({
 		// Pump from start(), not pull(): resolving pulls without enqueueing
 		// (long encrypted-reasoning stretches with no displayable frames)
 		// stalls delivery, idles the response, and the edge closes it.
 		async start(controller) {
-			const emit = (event: StreamEvent) => {
+			const emit = (event: UpstreamEvent) => {
 				if (!finished) {
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+					controller.enqueue(event);
 				}
 			};
 			const heartbeat = () => {
-				if (!finished) {
-					controller.enqueue(encoder.encode(`:thinking\n\n`));
-				}
+				emit({ type: "heartbeat" });
 			};
 			const finish = (event: StreamEvent) => {
 				if (!finished) {
 					finished = true;
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+					controller.enqueue(event);
 				}
 				try {
 					controller.close();
@@ -542,7 +586,8 @@ function parseMessages(
 	return { ok: true, messages: capHistory(parsed) };
 }
 
-function capHistory(messages: CompletionMessage[]): CompletionMessage[] {
+/** Last MAX_HISTORY turns, trimmed from the front to MAX_HISTORY_CHARS. */
+export function capHistory(messages: CompletionMessage[]): CompletionMessage[] {
 	const recent =
 		messages.length > MAX_HISTORY ? messages.slice(messages.length - MAX_HISTORY) : messages;
 

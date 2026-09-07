@@ -1,30 +1,24 @@
+/**
+ * Compat routes for the pre-tree client: full-document GET list and PUT.
+ * Shapes are frozen; the storage underneath is the message tree. These go
+ * away once the UI is on /turns (see tree-routes.ts, turns.ts).
+ */
 import { ensureDomainUser, getSessionUser } from "./auth.js";
+import {
+	MAX_CHATS,
+	MAX_CONTENT,
+	MAX_DEPTH,
+	MAX_REASONING,
+	MAX_TITLE,
+	isId,
+	isRole,
+	isTimestamp,
+	type ApiChat,
+	type ApiMessage,
+} from "./tree-types.js";
 
-const MAX_ID = 128;
-const MAX_TITLE = 200;
-const MAX_CHATS = 100;
-const MAX_MESSAGES = 80;
-const MAX_CONTENT = 8_000;
-/** Display-only thinking trace; small by construction, never sent upstream. */
-const MAX_REASONING = 4_000;
-
-type Role = "user" | "assistant";
-
-type ApiMessage = {
-	id: string;
-	role: Role;
-	content: string;
-	createdAt: number;
-	reasoning?: string;
-};
-
-type ApiChat = {
-	id: string;
-	title: string;
-	createdAt: number;
-	updatedAt: number;
-	messages: ApiMessage[];
-};
+/** Array cap of the compat PUT; maps 1:1 onto the schema's depth < MAX_DEPTH. */
+const MAX_MESSAGES = MAX_DEPTH;
 
 type ChatRow = {
 	id: string;
@@ -68,11 +62,7 @@ export async function handleChatsRequest(
 		return replaceChat(request, env, user, chatId);
 	}
 
-	if (request.method === "DELETE") {
-		return removeChat(env.DB, user.id, chatId);
-	}
-
-	return Response.json({ ok: false, error: "Use PUT or DELETE" }, { status: 405 });
+	return Response.json({ ok: false, error: "Use PUT" }, { status: 405 });
 }
 
 async function listCallerChats(db: D1Database, userId: string): Promise<Response> {
@@ -215,23 +205,6 @@ async function replaceChat(
 	return Response.json({ chat });
 }
 
-async function removeChat(
-	db: D1Database,
-	userId: string,
-	chatId: string,
-): Promise<Response> {
-	const result = await db
-		.prepare(`DELETE FROM chats WHERE id = ? AND user_id = ?`)
-		.bind(chatId, userId)
-		.run();
-
-	if (result.meta.changes === 0) {
-		return Response.json({ ok: false, error: "Not found" }, { status: 404 });
-	}
-
-	return Response.json({ ok: true });
-}
-
 function parseChatId(pathname: string): string | null {
 	const prefix = "/api/chats/";
 	if (!pathname.startsWith(prefix)) {
@@ -354,17 +327,5 @@ function parseMessage(
 			...(reasoning ? { reasoning } : {}),
 		},
 	};
-}
-
-function isId(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0 && value.length <= MAX_ID;
-}
-
-function isTimestamp(value: unknown): value is number {
-	return typeof value === "number" && Number.isFinite(value);
-}
-
-function isRole(value: unknown): value is Role {
-	return value === "user" || value === "assistant";
 }
 
