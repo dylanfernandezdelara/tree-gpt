@@ -103,25 +103,6 @@ export function CheckIcon(props: IconProps) {
 	);
 }
 
-const thumbPath =
-	"M6.5 8.5l3.3-5.1a1.35 1.35 0 0 1 2.45.9L11.7 7.5h3.5a1.9 1.9 0 0 1 1.87 2.25l-.95 4.6A1.9 1.9 0 0 1 14.25 15.9H6.5zM6.5 8.5H4.3a1.3 1.3 0 0 0-1.3 1.3v4.8a1.3 1.3 0 0 0 1.3 1.3h2.2";
-
-export function ThumbsUpIcon(props: IconProps) {
-	return (
-		<Svg {...props}>
-			<path {...stroke} d={thumbPath} />
-		</Svg>
-	);
-}
-
-export function ThumbsDownIcon(props: IconProps) {
-	return (
-		<Svg {...props}>
-			<path {...stroke} d={thumbPath} transform="rotate(180 10 10)" />
-		</Svg>
-	);
-}
-
 export function PencilIcon(props: IconProps) {
 	return (
 		<Svg {...props}>
@@ -184,6 +165,57 @@ export function ArrowDownIcon(props: IconProps) {
 	return (
 		<Svg {...props}>
 			<path {...stroke} strokeWidth={1.5} d="M10 4v12M4.5 10.5 10 16l5.5-5.5" />
+		</Svg>
+	);
+}
+
+export function ChevronIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} strokeWidth={1.5} d="M7.5 5l5 5-5 5" />
+		</Svg>
+	);
+}
+
+export function ForkIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} d="M6 4v7a3 3 0 0 0 3 3h5" />
+			<path {...stroke} d="M11.5 11.5 14 14l-2.5 2.5" />
+			<circle cx="6" cy="4" r="1.6" {...stroke} />
+		</Svg>
+	);
+}
+
+export function TreeIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} d="M4 4v9a2 2 0 0 0 2 2h3M4 8h5" />
+			<path {...stroke} d="M11 6h5M11 15h5" />
+		</Svg>
+	);
+}
+
+export function ListIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} d="M4 5.5h12M4 10h12M4 14.5h12" />
+		</Svg>
+	);
+}
+
+export function BookmarkIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} d="M5.5 3.8h9a.7.7 0 0 1 .7.7v11.2L10 13.1l-5.2 2.6V4.5a.7.7 0 0 1 .7-.7Z" />
+		</Svg>
+	);
+}
+
+export function BookmarkFilledIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path d="M5.5 3.3h9c.66 0 1.2.54 1.2 1.2v11.9a.6.6 0 0 1-.87.54L10 14.4l-4.83 2.54a.6.6 0 0 1-.87-.54V4.5c0-.66.54-1.2 1.2-1.2Z" />
 		</Svg>
 	);
 }

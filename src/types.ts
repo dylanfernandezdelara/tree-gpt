@@ -16,16 +16,36 @@ export type Message = {
 	error?: boolean;
 };
 
+/** How a chat came to exist, when it was forked from another one. */
+export type ForkOrigin = {
+	parentChatId: string;
+	/** "branch": a duplicated pane was typed in. "thread": text was highlighted. */
+	kind: "branch" | "thread";
+	/**
+	 * Message in the PARENT where the fork diverged. Copied messages are given
+	 * fresh ids, so this always refers to the parent's id space.
+	 */
+	parentMessageId: string | null;
+	/** "thread" only: the text the user highlighted. */
+	quote?: string;
+};
+
+/** A passage the user saved out of a conversation. */
+export type Bookmark = {
+	id: string;
+	chatId: string;
+	messageId: string;
+	/** Snapshot of the highlighted text, so a regenerated reply cannot change it. */
+	quote: string;
+	createdAt: number;
+};
+
 export type Chat = {
 	id: string;
 	title: string;
 	messages: Message[];
 	createdAt: number;
 	updatedAt: number;
-};
-
-export type PersistedState = {
-	chats: Chat[];
-	activeChatId: string | null;
-	sidebarOpen: boolean;
+	/** Absent for a chat that was started from scratch. */
+	origin?: ForkOrigin;
 };

@@ -9,12 +9,22 @@ import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
+import { BookmarksView } from "./components/BookmarksView";
+import {
+	addBookmark,
+	dropBookmarksForChat,
+	openBookmarkPane,
+	removeBookmark as removeFromList,
+} from "./lib/bookmarks";
+import { ancestorIds, childrenByParent } from "./lib/forest";
 import {
 	clearChat,
 	dropAbility,
 	findPane,
 	listPanes,
 	movePane,
+	NO_DROPS,
+	placeBeside,
 	removePane,
 	setPaneChat,
 	splitPane,
@@ -22,21 +32,31 @@ import {
 	type DragPayload,
 	type DropSide,
 	type LayoutNode,
+	type PaneLeaf,
 } from "./lib/layout";
 import {
+	loadBookmarks,
+	loadBookmarksWidth,
 	loadLayout,
+	loadLineage,
 	loadLocalChats,
 	loadSelectedModel,
 	loadSidebarOpen,
+	loadSidebarTree,
 	newId,
 	persistableFields,
+	saveBookmarks,
+	saveBookmarksWidth,
 	saveLayout,
+	saveLineage,
 	saveLocalChats,
 	saveSelectedModel,
 	saveSidebarOpen,
+	saveSidebarTree,
 	titleFromMessage,
+	type SidebarTree,
 } from "./lib/storage";
-import type { Chat, Message } from "./types";
+import type { Bookmark, Chat, ForkOrigin, Message } from "./types";
 import type { ModelId } from "../worker/tree-types";
 
 const SYNC_DEBOUNCE_MS = 500;
@@ -53,9 +73,40 @@ type Store = {
 	ns: string;
 	kind: "local" | "remote";
 	chats: Chat[];
+	/** Which workspace is on screen. Both keep their own windows. */
+	view: "chats" | "bookmarks";
 	layout: LayoutNode;
 	focusedPaneId: string;
+	bookmarks: Bookmark[];
+	/** Bookmarks screen: at most two windows, stacked. Null until one opens. */
+	bookmarkLayout: LayoutNode | null;
+	bookmarkFocusedPaneId: string | null;
 };
+
+/** The windows of whichever workspace is showing. */
+function layoutOf(store: Store): LayoutNode | null {
+	return store.view === "chats" ? store.layout : store.bookmarkLayout;
+}
+
+function focusedOf(store: Store): string | null {
+	return store.view === "chats" ? store.focusedPaneId : store.bookmarkFocusedPaneId;
+}
+
+function withLayout(store: Store, root: LayoutNode, focusedPaneId?: string): Store {
+	return store.view === "chats"
+		? { ...store, layout: root, focusedPaneId: focusedPaneId ?? store.focusedPaneId }
+		: {
+				...store,
+				bookmarkLayout: root,
+				bookmarkFocusedPaneId: focusedPaneId ?? store.bookmarkFocusedPaneId,
+			};
+}
+
+/** A highlighted passage a pane will fork from once something is sent. */
+type ThreadAnchor = { messageId: string; quote: string };
+
+const NO_FORKS: Chat[] = [];
+const NO_BOOKMARKS: Bookmark[] = [];
 
 function App() {
 	const session = authClient.useSession();
@@ -88,6 +139,22 @@ function ChatApp({ user }: { user: AuthUser }) {
 	const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
 	/** What is being dragged right now; drives every pane's drop preview. */
 	const [drag, setDrag] = useState<DragPayload | null>(null);
+	/** Pending threads per pane; transient like drafts. */
+	const [threads, setThreads] = useState<Record<string, ThreadAnchor>>({});
+	/**
+	 * Bumped to replay the focus ring when nothing else about the focused pane
+	 * changed, e.g. a fork link pointing at the pane you are already on.
+	 */
+	const [flashNonce, setFlashNonce] = useState(0);
+	/** Which pane should scroll to a saved passage, and which passage. */
+	const [highlight, setHighlight] = useState<{
+		paneId: string;
+		messageId: string;
+		quote: string;
+		nonce: number;
+	} | null>(null);
+	const [bookmarksWidth, setBookmarksWidth] = useState(loadBookmarksWidth);
+	const [sidebarTree, setSidebarTree] = useState<SidebarTree>({ view: "tree", expanded: [] });
 	const pendingRef = useRef(new Map<string, AbortController>());
 	const syncRef = useRef<RemoteSync | null>(null);
 
@@ -118,18 +185,37 @@ function ChatApp({ user }: { user: AuthUser }) {
 				kind = "remote";
 			} else {
 				console.warn(
-					"[treeGPT] /api/chats is not available; keeping this account's chats on this device for now.",
+					"[Fork] /api/chats is not available; keeping this account's chats on this device for now.",
 				);
 				chats = loadLocalChats(ns);
 				kind = "local";
 			}
+			// The Worker does not persist `origin` yet, so fill it from the local
+			// mirror. A server-provided origin always wins.
+			const lineage = loadLineage(ns);
+			chats = chats.map((chat) =>
+				chat.origin ?? !lineage[chat.id] ? chat : { ...chat, origin: lineage[chat.id] },
+			);
 			if (kind === "remote") {
 				syncRef.current = new RemoteSync(chats);
 			}
 			const layout = loadLayout(ns, new Set(chats.map((chat) => chat.id)));
 			setPendingIds(new Set());
 			setDrafts({});
-			setStore({ ns, kind, chats, layout: layout.root, focusedPaneId: layout.focusedPaneId });
+			setThreads({});
+			setFlashNonce(0);
+			setSidebarTree(loadSidebarTree(ns));
+			setStore({
+				ns,
+				kind,
+				chats,
+				view: "chats",
+				layout: layout.root,
+				focusedPaneId: layout.focusedPaneId,
+				bookmarks: loadBookmarks(ns),
+				bookmarkLayout: null,
+				bookmarkFocusedPaneId: null,
+			});
 		}
 		void load();
 		return () => controller.abort();
@@ -156,15 +242,34 @@ function ChatApp({ user }: { user: AuthUser }) {
 		saveSelectedModel(model);
 	}, [model]);
 
+	useEffect(() => {
+		saveBookmarksWidth(bookmarksWidth);
+	}, [bookmarksWidth]);
+
+	useEffect(() => {
+		if (active) {
+			saveSidebarTree(active.ns, sidebarTree);
+		}
+	}, [active, sidebarTree]);
+
 	const chats = active?.chats ?? NO_CHATS;
-	const layout = active?.layout ?? null;
-	const panes = useMemo(() => (layout ? listPanes(layout) : []), [layout]);
-	const focusedPane = panes.find((pane) => pane.id === active?.focusedPaneId) ?? panes[0] ?? null;
+	const view = active?.view ?? "chats";
+	const bookmarks = active?.bookmarks ?? NO_BOOKMARKS;
+	const activeLayout = active ? layoutOf(active) : null;
+	const panes = useMemo(() => (activeLayout ? listPanes(activeLayout) : []), [activeLayout]);
+	const focusedPaneId = active ? focusedOf(active) : null;
+	const focusedPane = panes.find((pane) => pane.id === focusedPaneId) ?? panes[0] ?? null;
+	const openChatIds = useMemo(
+		() => new Set(panes.map((pane) => pane.chatId).filter((id): id is string => id !== null)),
+		[panes],
+	);
 	const sortedChats = useMemo(
 		() => [...chats].sort((a, b) => b.updatedAt - a.updatedAt),
 		[chats],
 	);
 	const chatById = useMemo(() => new Map(chats.map((chat) => [chat.id, chat])), [chats]);
+	/** Forks of each chat, newest first, for the links under a conversation. */
+	const forksOf = useMemo(() => childrenByParent(sortedChats), [sortedChats]);
 
 	function updateStore(update: (prev: Store) => Store) {
 		setStore((prev) => (prev ? update(prev) : prev));
@@ -185,21 +290,18 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	function focusPane(paneId: string) {
-		updateStore((prev) => (prev.focusedPaneId === paneId ? prev : { ...prev, focusedPaneId: paneId }));
+		updateStore((prev) => {
+			if (focusedOf(prev) === paneId) {
+				return prev;
+			}
+			const root = layoutOf(prev);
+			return root ? withLayout(prev, root, paneId) : prev;
+		});
 	}
 
 	/** A chat id we can actually show; anything unknown opens as a new chat. */
 	function resolveChatId(prev: Store, chatId: string | null): string | null {
 		return chatId !== null && prev.chats.some((chat) => chat.id === chatId) ? chatId : null;
-	}
-
-	/** Show a chat (or an empty new chat) in a pane and focus it. */
-	function openInPane(paneId: string, chatId: string | null) {
-		updateStore((prev) => ({
-			...prev,
-			layout: setPaneChat(prev.layout, paneId, resolveChatId(prev, chatId)),
-			focusedPaneId: paneId,
-		}));
 	}
 
 	/**
@@ -210,10 +312,13 @@ function ChatApp({ user }: { user: AuthUser }) {
 	function dropOnPane(paneId: string, target: DropSide | "swap", payload: DragPayload) {
 		setDrag(null);
 		updateStore((prev) => {
-			if (!findPane(prev.layout, paneId)) {
+			// Rearranging is a conversation-workspace affair; the bookmarks screen
+			// is capped at two stacked windows.
+			const root = prev.view === "chats" ? prev.layout : null;
+			if (!root || !findPane(root, paneId)) {
 				return prev;
 			}
-			const ability = dropAbility(prev.layout, paneId, payload);
+			const ability = dropAbility(root, paneId, payload);
 			const allowed = target === "swap" ? ability.swap : ability.sides[target];
 			if (!allowed) {
 				return prev;
@@ -221,37 +326,39 @@ function ChatApp({ user }: { user: AuthUser }) {
 			if (payload.kind === "chat") {
 				const chatId = resolveChatId(prev, payload.chatId);
 				if (target === "swap" || target === "center") {
-					return {
-						...prev,
-						layout: setPaneChat(prev.layout, paneId, chatId),
-						focusedPaneId: paneId,
-					};
+					return withLayout(prev, setPaneChat(root, paneId, chatId), paneId);
 				}
-				const { root, newPaneId } = splitPane(prev.layout, paneId, target, chatId);
-				return { ...prev, layout: root, focusedPaneId: newPaneId };
+				const split = splitPane(root, paneId, target, chatId);
+				return withLayout(prev, split.root, split.newPaneId);
 			}
 			if (target === "swap") {
-				return { ...prev, layout: swapPanes(prev.layout, payload.paneId, paneId) };
+				return withLayout(prev, swapPanes(root, payload.paneId, paneId));
 			}
 			if (target === "center") {
 				return prev;
 			}
-			return {
-				...prev,
-				layout: movePane(prev.layout, payload.paneId, paneId, target),
-				focusedPaneId: payload.paneId,
-			};
+			return withLayout(prev, movePane(root, payload.paneId, paneId, target), payload.paneId);
 		});
 	}
 
 	function closePane(paneId: string) {
 		updateStore((prev) => {
-			const root = removePane(prev.layout, paneId);
+			const current = layoutOf(prev);
+			if (!current) {
+				return prev;
+			}
+			// Closing the bookmarks screen's only window returns to the full-width
+			// list; the chat workspace always keeps at least one window.
+			if (prev.view === "bookmarks") {
+				return { ...prev, bookmarkLayout: null, bookmarkFocusedPaneId: null };
+			}
+			const root = removePane(current, paneId);
 			const remaining = listPanes(root);
-			const focusedPaneId = remaining.some((pane) => pane.id === prev.focusedPaneId)
-				? prev.focusedPaneId
+			const focused = focusedOf(prev);
+			const focusedPaneId = remaining.some((pane) => pane.id === focused)
+				? (focused ?? remaining[0].id)
 				: remaining[0].id;
-			return { ...prev, layout: root, focusedPaneId };
+			return withLayout(prev, root, focusedPaneId);
 		});
 		setDrafts((prev) => {
 			if (!(paneId in prev)) {
@@ -261,6 +368,101 @@ function ChatApp({ user }: { user: AuthUser }) {
 			delete next[paneId];
 			return next;
 		});
+		clearThread(paneId);
+	}
+
+	/** Reveal a chat's ancestors so a new fork is visible in the tree. */
+	function revealInTree(chats: Chat[], chatId: string) {
+		const ids = ancestorIds(chats, chatId);
+		if (ids.length === 0) {
+			return;
+		}
+		setSidebarTree((prev) => ({
+			...prev,
+			expanded: [...new Set([...prev.expanded, ...ids])],
+		}));
+	}
+
+	/**
+	 * Open a conversation beside a pane: to the right when there is room,
+	 * otherwise reusing the pane already there, then below, then in place.
+	 */
+	function placeChat(paneId: string, chatId: string | null, anchor?: ThreadAnchor) {
+		updateStore((prev) => {
+			const placed =
+				prev.view === "chats"
+					? placeBeside(prev.layout, paneId, chatId)
+					: openBookmarkPane(prev.bookmarkLayout, prev.bookmarkFocusedPaneId, chatId ?? "");
+			if (anchor) {
+				setThreads((current) => ({ ...current, [placed.paneId]: anchor }));
+			}
+			return withLayout(prev, placed.root, placed.paneId);
+		});
+	}
+
+	/**
+	 * Fork from a highlighted passage. The new pane shows the SAME chat, so the
+	 * existing "open in two panes" rule forks it on the next send; the anchor
+	 * only decides how that fork is recorded.
+	 */
+	function startThread(paneId: string, messageId: string, quote: string) {
+		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
+		if (!pane?.chatId) {
+			return;
+		}
+		placeChat(paneId, pane.chatId, { messageId, quote });
+	}
+
+	function clearThread(paneId: string) {
+		setThreads((prev) => {
+			if (!(paneId in prev)) {
+				return prev;
+			}
+			const next = { ...prev };
+			delete next[paneId];
+			return next;
+		});
+	}
+
+	/**
+	 * Focus the pane already showing a chat, if there is one. Opening a second
+	 * copy would silently arm the branch-on-send rule, so every path that
+	 * "opens" a chat checks here first.
+	 */
+	function focusChatIfOpen(chatId: string): boolean {
+		const open = activeLayout
+			? listPanes(activeLayout).find((pane) => pane.chatId === chatId)
+			: undefined;
+		if (!open) {
+			return false;
+		}
+		updateStore((prev) => ({ ...prev, focusedPaneId: open.id }));
+		setFlashNonce((n) => n + 1);
+		return true;
+	}
+
+	/** Follow a fork link: reveal the fork if it is already open, else open it beside. */
+	function openFork(paneId: string, chatId: string) {
+		if (!active || focusChatIfOpen(chatId)) {
+			return;
+		}
+		placeChat(paneId, chatId);
+	}
+
+	function toggleForkRow(chatId: string) {
+		setSidebarTree((prev) => ({
+			...prev,
+			expanded: prev.expanded.includes(chatId)
+				? prev.expanded.filter((id) => id !== chatId)
+				: [...prev.expanded, chatId],
+		}));
+	}
+
+	/** Collapse shows the tree with every row closed; expand flattens it. */
+	function toggleSidebarView() {
+		setSidebarTree((prev) =>
+			prev.view === "tree" ? { view: "flat", expanded: [] } : { view: "tree", expanded: [] },
+		);
 	}
 
 	function setDraft(paneId: string, value: string) {
@@ -347,7 +549,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (!active) {
 			return;
 		}
-		const pane = findPane(active.layout, paneId);
+		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		const content = (drafts[paneId] ?? "").trim();
 		if (!pane || !content) {
 			return;
@@ -360,28 +562,54 @@ function ChatApp({ user }: { user: AuthUser }) {
 		// other panes keep the original conversation.
 		const shared =
 			chat !== null &&
-			listPanes(active.layout).filter((other) => other.chatId === chat.id).length > 1;
+			activeLayout !== null &&
+			listPanes(activeLayout).filter((other) => other.chatId === chat.id).length > 1;
+		// A threading anchor forks on its own. The bookmarks screen holds one
+		// window, so a thread there reuses the pane and `shared` never holds;
+		// without this the fork would silently append to the parent instead.
+		const anchor = threads[paneId];
 		const { now, userMessage, reply } = newExchange(content);
 		setDraft(paneId, "");
 
-		if (chat && shared) {
-			// A branch continues the same conversation, so it inherits the
+		if (chat && (shared || anchor)) {
+			// A fork continues the same conversation, so it inherits the
 			// source chat's locked model rather than the global preference.
 			const sendModel = modelFor(chat.id);
 			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
+			const carried = copyMessages(chat.messages);
+			// A thread diverges at the highlighted message; a plain branch at the
+			// last turn carried over. Both refer to the parent's message ids.
+			const origin: ForkOrigin = anchor
+				? {
+						parentChatId: chat.id,
+						kind: "thread",
+						parentMessageId: anchor.messageId,
+						quote: anchor.quote,
+					}
+				: {
+						parentChatId: chat.id,
+						kind: "branch",
+						parentMessageId: lastPersistedId(chat.messages),
+					};
 			const branched: Chat = {
 				id: newId(),
 				title: titleFromMessage(content),
-				messages: [...copyMessages(chat.messages), userMessage, reply],
+				messages: [...carried, userMessage, reply],
 				createdAt: now,
 				updatedAt: now,
+				origin,
 			};
+			clearThread(paneId);
 			lockModel(branched.id, sendModel);
-			updateStore((prev) => ({
-				...prev,
-				chats: [branched, ...prev.chats],
-				layout: setPaneChat(prev.layout, paneId, branched.id),
-			}));
+			updateStore((prev) => {
+				const chats = [branched, ...prev.chats];
+				saveLineage(prev.ns, { ...loadLineage(prev.ns), [branched.id]: origin });
+				revealInTree(chats, branched.id);
+				return {
+					...withLayout(prev, setPaneChat(layoutOf(prev) ?? prev.layout, paneId, branched.id)),
+					chats,
+				};
+			});
 			void request(branched.id, reply.id, history, sendModel);
 		} else if (chat) {
 			const sendModel = modelFor(chat.id);
@@ -403,9 +631,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 			};
 			lockModel(created.id, model);
 			updateStore((prev) => ({
-				...prev,
+				...withLayout(prev, setPaneChat(layoutOf(prev) ?? prev.layout, paneId, created.id)),
 				chats: [created, ...prev.chats],
-				layout: setPaneChat(prev.layout, paneId, created.id),
 			}));
 			void request(created.id, reply.id, [{ role: "user", content }], model);
 		}
@@ -416,7 +643,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (!active) {
 			return;
 		}
-		const pane = findPane(active.layout, paneId);
+		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		const chat = pane?.chatId ? (chatById.get(pane.chatId) ?? null) : null;
 		if (!chat || pendingRef.current.has(chat.id)) {
 			return;
@@ -441,22 +668,106 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	function stop(paneId: string) {
-		const pane = active ? findPane(active.layout, paneId) : null;
+		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		if (pane?.chatId) {
 			pendingRef.current.get(pane.chatId)?.abort();
 		}
 	}
 
+	function showBookmarks() {
+		updateStore((prev) => (prev.view === "bookmarks" ? prev : { ...prev, view: "bookmarks" }));
+	}
+
+	function addBookmarkFrom(paneId: string, messageId: string, quote: string) {
+		updateStore((prev) => {
+			const root = layoutOf(prev);
+			const pane = root ? findPane(root, paneId) : null;
+			if (!pane?.chatId) {
+				return prev;
+			}
+			const next = addBookmark(prev.bookmarks, {
+				id: newId(),
+				chatId: pane.chatId,
+				messageId,
+				quote,
+				createdAt: Date.now(),
+			});
+			saveBookmarks(prev.ns, next);
+			return { ...prev, bookmarks: next };
+		});
+	}
+
+	function deleteBookmark(id: string) {
+		updateStore((prev) => {
+			const next = removeFromList(prev.bookmarks, id);
+			saveBookmarks(prev.ns, next);
+			return { ...prev, bookmarks: next };
+		});
+	}
+
+	/** Open a saved passage: stack its conversation and jump to the passage. */
+	function openBookmark(bookmark: Bookmark) {
+		updateStore((prev) => {
+			if (!prev.chats.some((chat) => chat.id === bookmark.chatId)) {
+				return prev;
+			}
+			const placed = openBookmarkPane(
+				prev.bookmarkLayout,
+				prev.bookmarkFocusedPaneId,
+				bookmark.chatId,
+			);
+			setHighlight({
+				paneId: placed.paneId,
+				messageId: bookmark.messageId,
+				quote: bookmark.quote,
+				nonce: Date.now(),
+			});
+			return {
+				...prev,
+				view: "bookmarks",
+				bookmarkLayout: placed.root,
+				bookmarkFocusedPaneId: placed.paneId,
+			};
+		});
+	}
+
+	/** The sidebar always drives the conversation workspace. */
+	function chatsTarget(store: Store): PaneLeaf {
+		const panesList = listPanes(store.layout);
+		return panesList.find((pane) => pane.id === store.focusedPaneId) ?? panesList[0];
+	}
+
 	function newChat() {
-		if (focusedPane) {
-			openInPane(focusedPane.id, null);
+		if (!active) {
+			return;
 		}
+		const target = chatsTarget(active);
+		updateStore((prev) => ({
+			...prev,
+			view: "chats",
+			layout: setPaneChat(prev.layout, target.id, null),
+			focusedPaneId: target.id,
+		}));
 	}
 
 	function selectChat(chatId: string) {
-		if (focusedPane) {
-			openInPane(focusedPane.id, chatId);
+		if (!active) {
+			return;
 		}
+		// Always lands in the conversation workspace, whichever screen you were on.
+		const open = listPanes(active.layout).find((pane) => pane.chatId === chatId);
+		if (open) {
+			updateStore((prev) => ({ ...prev, view: "chats", focusedPaneId: open.id }));
+			setFlashNonce((n) => n + 1);
+			return;
+		}
+		const target = chatsTarget(active);
+		updateStore((prev) => ({
+			...prev,
+			view: "chats",
+			layout: setPaneChat(prev.layout, target.id, chatId),
+			focusedPaneId: target.id,
+		}));
 	}
 
 	async function logOut() {
@@ -473,11 +784,75 @@ function ChatApp({ user }: { user: AuthUser }) {
 
 	function deleteChat(id: string) {
 		pendingRef.current.get(id)?.abort();
-		updateStore((prev) => ({
-			...prev,
-			chats: prev.chats.filter((chat) => chat.id !== id),
-			layout: clearChat(prev.layout, id),
-		}));
+		updateStore((prev) => {
+			const lineage = loadLineage(prev.ns);
+			delete lineage[id];
+			saveLineage(prev.ns, lineage);
+			// A deleted conversation takes its bookmarks with it, in storage too;
+			// otherwise they come back orphaned on the next load.
+			const bookmarks = dropBookmarksForChat(prev.bookmarks, id);
+			if (bookmarks.length !== prev.bookmarks.length) {
+				saveBookmarks(prev.ns, bookmarks);
+			}
+			return {
+				...prev,
+				chats: prev.chats.filter((chat) => chat.id !== id),
+				layout: clearChat(prev.layout, id),
+				bookmarkLayout: prev.bookmarkLayout ? clearChat(prev.bookmarkLayout, id) : null,
+				bookmarks,
+			};
+		});
+	}
+
+	/** One conversation window, used by both workspaces. */
+	function renderPane(pane: PaneLeaf) {
+		const chat = pane.chatId ? (chatById.get(pane.chatId) ?? null) : null;
+		const streaming = chat ? pendingIds.has(chat.id) : false;
+		return (
+			<ChatPane
+				key={pane.id}
+				pane={pane}
+				chat={chat}
+				focused={pane.id === focusedPane?.id}
+				// A lone chat-screen window has nothing to close to; the bookmarks
+				// screen's single window closes back to the full-width list.
+				showHeader={panes.length > 1 || view === "bookmarks"}
+				draft={drafts[pane.id] ?? ""}
+				streaming={streaming}
+				busy={streaming}
+				model={model}
+				onModelChange={setModel}
+				// The bookmarks screen holds one window, so nothing there accepts a drag.
+				ability={
+					view === "chats" && activeLayout ? dropAbility(activeLayout, pane.id, drag) : NO_DROPS
+				}
+				dragging={drag?.kind === "pane" && drag.paneId === pane.id}
+				dropEffect={drag?.kind === "pane" ? "move" : "copy"}
+				forks={(chat && forksOf.get(chat.id)) || NO_FORKS}
+				thread={threads[pane.id] ?? null}
+				highlight={highlight?.paneId === pane.id ? highlight : null}
+				flashKey={
+					// A single full-screen chat has no other pane to distinguish it
+					// from, so it never rings.
+					panes.length > 1 && pane.id === focusedPane?.id
+						? `${pane.chatId ?? "empty"}#${flashNonce}`
+						: null
+				}
+				onFocus={() => focusPane(pane.id)}
+				onClose={() => closePane(pane.id)}
+				onDraftChange={(value) => setDraft(pane.id, value)}
+				onSend={() => send(pane.id)}
+				onStop={() => stop(pane.id)}
+				onRedo={(messageId) => redo(pane.id, messageId)}
+				onOpenFork={(chatId) => openFork(pane.id, chatId)}
+				onThread={(messageId, quote) => startThread(pane.id, messageId, quote)}
+				onBookmark={(messageId, quote) => addBookmarkFrom(pane.id, messageId, quote)}
+				onClearThread={() => clearThread(pane.id)}
+				onDragStart={setDrag}
+				onDragEnd={() => setDrag(null)}
+				onDrop={(target, payload) => dropOnPane(pane.id, target, payload)}
+			/>
+		);
 	}
 
 	return (
@@ -493,61 +868,45 @@ function ChatApp({ user }: { user: AuthUser }) {
 				onDelete={deleteChat}
 				user={user}
 				onLogOut={logOut}
+				bookmarksOpen={view === "bookmarks"}
+				onShowBookmarks={showBookmarks}
+				view={sidebarTree.view}
+				expanded={sidebarTree.expanded}
+				onToggleView={toggleSidebarView}
+				onToggleRow={toggleForkRow}
 				onDragStart={setDrag}
 				onDragEnd={() => setDrag(null)}
 			/>
 			<main className="main">
-				<header className="main__header">
-					{sidebarOpen ? null : (
-						<>
-							<IconButton label="Open sidebar" onClick={() => setSidebarOpen(true)}>
-								<SidebarIcon />
-							</IconButton>
-							<IconButton label="New chat" onClick={newChat}>
-								<ComposeIcon />
-							</IconButton>
-						</>
-					)}
-					<div className="main__header-spacer" />
-					{sidebarOpen ? null : (
+				{/* Only worth its height when the sidebar is away and it holds the controls. */}
+				{sidebarOpen ? null : (
+					<header className="main__header">
+						<IconButton label="Open sidebar" onClick={() => setSidebarOpen(true)}>
+							<SidebarIcon />
+						</IconButton>
+						<IconButton label="New chat" onClick={newChat}>
+							<ComposeIcon />
+						</IconButton>
+						<div className="main__header-spacer" />
 						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
-					)}
-				</header>
+					</header>
+				)}
 				<div className="main__body">
-					{layout ? (
-						<PaneLayout
-							root={layout}
-							renderPane={(pane) => {
-								const chat = pane.chatId ? (chatById.get(pane.chatId) ?? null) : null;
-								const streaming = chat ? pendingIds.has(chat.id) : false;
-								return (
-									<ChatPane
-										key={pane.id}
-										pane={pane}
-										chat={chat}
-										focused={pane.id === focusedPane?.id}
-										multi={panes.length > 1}
-										draft={drafts[pane.id] ?? ""}
-										streaming={streaming}
-										busy={streaming}
-										model={model}
-										onModelChange={setModel}
-										ability={dropAbility(layout, pane.id, drag)}
-										dragging={drag?.kind === "pane" && drag.paneId === pane.id}
-										dropEffect={drag?.kind === "pane" ? "move" : "copy"}
-										onFocus={() => focusPane(pane.id)}
-										onClose={() => closePane(pane.id)}
-										onDraftChange={(value) => setDraft(pane.id, value)}
-										onSend={() => send(pane.id)}
-										onStop={() => stop(pane.id)}
-										onRedo={(messageId) => redo(pane.id, messageId)}
-										onDragStart={setDrag}
-										onDragEnd={() => setDrag(null)}
-										onDrop={(target, payload) => dropOnPane(pane.id, target, payload)}
-									/>
-								);
-							}}
-						/>
+					{view === "bookmarks" ? (
+						<BookmarksView
+							bookmarks={bookmarks}
+							chatsById={chatById}
+							openChatIds={openChatIds}
+							width={bookmarksWidth}
+							onWidthChange={setBookmarksWidth}
+							onOpen={openBookmark}
+							onRemove={deleteBookmark}
+							hasPanes={activeLayout !== null}
+						>
+							{activeLayout ? <PaneLayout root={activeLayout} renderPane={renderPane} /> : null}
+						</BookmarksView>
+					) : activeLayout ? (
+						<PaneLayout root={activeLayout} renderPane={renderPane} />
 					) : null}
 				</div>
 			</main>
@@ -561,7 +920,10 @@ function newExchange(content: string): { now: number; userMessage: Message; repl
 	return {
 		now,
 		userMessage: { id: newId(), role: "user", content, createdAt: now },
-		reply: { id: newId(), role: "assistant", content: "", createdAt: now, pending: true },
+		// Strictly later than the question: the Worker orders messages by
+		// created_at and breaks ties on the random message id, so sharing a
+		// timestamp lets the reply come back above the question.
+		reply: { id: newId(), role: "assistant", content: "", createdAt: now + 1, pending: true },
 	};
 }
 
@@ -573,6 +935,17 @@ function copyMessages(messages: Message[]): Message[] {
 	return messages
 		.filter((m) => !m.pending && !m.error)
 		.map((m) => ({ id: newId(), ...persistableFields(m) }));
+}
+
+/** Last message that survives into a fork, for recording where it diverged. */
+function lastPersistedId(messages: Message[]): string | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (!message.pending && !message.error) {
+			return message.id;
+		}
+	}
+	return null;
 }
 
 /** Conversation turns to send upstream: finished messages only. */
@@ -615,7 +988,7 @@ class RemoteSync {
 				this.cancelTimer(id);
 				this.enqueue(id, async () => {
 					if (!(await deleteRemoteChat(id))) {
-						console.warn(`[treeGPT] Failed to delete chat ${id} on the server.`);
+						console.warn(`[Fork] Failed to delete chat ${id} on the server.`);
 					}
 				});
 			}
@@ -639,7 +1012,7 @@ class RemoteSync {
 			}
 			this.enqueue(chat.id, async () => {
 				if (!(await upsertChat(latest))) {
-					console.warn(`[treeGPT] Failed to save chat ${chat.id} on the server.`);
+					console.warn(`[Fork] Failed to save chat ${chat.id} on the server.`);
 				}
 			});
 		}, SYNC_DEBOUNCE_MS);

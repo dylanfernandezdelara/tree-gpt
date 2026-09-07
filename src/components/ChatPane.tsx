@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
 	dropSideAt,
 	hasDragPayload,
@@ -25,8 +25,8 @@ type Props = {
 	pane: PaneLeaf;
 	chat: Chat | null;
 	focused: boolean;
-	/** More than one pane is open: show the pane header with its close button. */
-	multi: boolean;
+	/** Show the title bar with its close button and drag handle. */
+	showHeader: boolean;
 	draft: string;
 	streaming: boolean;
 	busy: boolean;
@@ -39,12 +39,27 @@ type Props = {
 	dragging: boolean;
 	/** How to label the drag for the cursor: panes move, sidebar chats copy. */
 	dropEffect: "move" | "copy";
+	/** Chats forked from this pane's chat, listed under the last message. */
+	forks: Chat[];
+	/** The passage this pane will fork from once something is sent. */
+	thread: { messageId: string; quote: string } | null;
+	/** Scroll to a bookmarked passage and tint it; replays when `nonce` changes. */
+	highlight: { messageId: string; quote: string; nonce: number } | null;
+	/**
+	 * Non-null only while this pane has focus, and changes whenever the ring
+	 * should replay: focus arriving here, or its chat being swapped out.
+	 */
+	flashKey: string | null;
 	onFocus: () => void;
 	onClose: () => void;
 	onDraftChange: (value: string) => void;
 	onSend: () => void;
 	onStop: () => void;
 	onRedo: (messageId: string) => void;
+	onOpenFork: (chatId: string) => void;
+	onThread: (messageId: string, quote: string) => void;
+	onBookmark: (messageId: string, quote: string) => void;
+	onClearThread: () => void;
 	onDragStart: (payload: DragPayload) => void;
 	onDragEnd: () => void;
 	/** Something was dropped on this pane. */
@@ -56,7 +71,7 @@ export function ChatPane({
 	pane,
 	chat,
 	focused,
-	multi,
+	showHeader,
 	draft,
 	streaming,
 	busy,
@@ -65,12 +80,20 @@ export function ChatPane({
 	ability,
 	dragging,
 	dropEffect,
+	forks,
+	thread,
+	highlight,
+	flashKey,
 	onFocus,
 	onClose,
 	onDraftChange,
 	onSend,
 	onStop,
 	onRedo,
+	onOpenFork,
+	onThread,
+	onBookmark,
+	onClearThread,
 	onDragStart,
 	onDragEnd,
 	onDrop,
@@ -80,6 +103,15 @@ export function ChatPane({
 	const headerDepthRef = useRef(0);
 	const [dropSide, setDropSide] = useState<DropSide | null>(null);
 	const [headerHover, setHeaderHover] = useState(false);
+	const inputRef = useRef<HTMLTextAreaElement>(null);
+
+	// A pane opened for threading should be ready to type in straight away,
+	// including when an existing pane was reused and so never remounted.
+	useEffect(() => {
+		if (thread) {
+			inputRef.current?.focus();
+		}
+	}, [thread]);
 
 	function accepts(target: DropTarget): boolean {
 		return target === "swap" ? ability.swap : ability.sides[target];
@@ -200,15 +232,30 @@ export function ChatPane({
 		.join(" ");
 
 	const composer = (
-		<Composer
-			value={draft}
-			onChange={onDraftChange}
-			onSend={onSend}
-			onStop={onStop}
-			streaming={streaming}
-			busy={busy}
-			autoFocus={focused}
-		/>
+		<>
+			{thread ? (
+				<div className="thread-quote">
+					<p className="thread-quote__text">{thread.quote}</p>
+					<IconButton
+						label="Clear threaded passage"
+						className="thread-quote__clear"
+						onClick={onClearThread}
+					>
+						<CloseIcon />
+					</IconButton>
+				</div>
+			) : null}
+			<Composer
+				value={draft}
+				onChange={onDraftChange}
+				onSend={onSend}
+				onStop={onStop}
+				streaming={streaming}
+				busy={busy}
+				autoFocus={focused}
+				inputRef={inputRef}
+			/>
+		</>
 	);
 
 	return (
@@ -222,7 +269,7 @@ export function ChatPane({
 			onDragLeave={handleBodyDragLeave}
 			onDrop={handleBodyDrop}
 		>
-			{multi ? (
+			{showHeader ? (
 				<div
 					className={headerClass}
 					draggable
@@ -248,7 +295,17 @@ export function ChatPane({
 				</div>
 			) : null}
 			{chat && chat.messages.length > 0 ? (
-				<ChatThread chat={chat} onRedo={onRedo} composer={composer} />
+				<ChatThread
+					chat={chat}
+					onRedo={onRedo}
+					composer={composer}
+					forks={forks}
+					onOpenFork={onOpenFork}
+					onThread={onThread}
+					onBookmark={onBookmark}
+					highlight={highlight}
+					focused={focused}
+				/>
 			) : (
 				<EmptyState>
 					<div className="composer-stack">
@@ -261,6 +318,9 @@ export function ChatPane({
 				className={`pane__drop${previewSide ? ` pane__drop--visible pane__drop--${previewSide}` : ""}`}
 				aria-hidden="true"
 			/>
+			{/* Remounted on every new key, which replays the one-shot ring. Only the
+			    focused pane is ever given a key, so the ring always marks focus. */}
+			{flashKey === null ? null : <span key={flashKey} className="pane__flash" aria-hidden="true" />}
 		</section>
 	);
 }

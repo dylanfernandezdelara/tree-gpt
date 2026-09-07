@@ -27,8 +27,8 @@ export function LoginPage() {
 	return (
 		<div className="login-page">
 			<div className="auth-dialog">
-				<div className="auth-dialog__brand">treeGPT</div>
-				<h1 className="auth-dialog__title">Log in to treeGPT</h1>
+				<div className="auth-dialog__brand">Fork</div>
+				<h1 className="auth-dialog__title">Log in to Fork</h1>
 				<p className="login-page__copy">
 					Continue with your GitHub account to start chatting.
 				</p>

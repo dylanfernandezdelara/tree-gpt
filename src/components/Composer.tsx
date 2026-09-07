@@ -1,4 +1,10 @@
-import { useLayoutEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import {
+	useLayoutEffect,
+	useRef,
+	type FormEvent,
+	type KeyboardEvent,
+	type RefObject,
+} from "react";
 import { SendIcon, StopIcon } from "./Icons";
 
 const MAX_HEIGHT = 208;
@@ -14,6 +20,8 @@ type Props = {
 	busy: boolean;
 	/** Focus the text field on mount (only the focused pane should). */
 	autoFocus?: boolean;
+	/** Lets the pane focus the field later, e.g. when a thread opens in it. */
+	inputRef?: RefObject<HTMLTextAreaElement | null>;
 };
 
 export function Composer({
@@ -24,8 +32,10 @@ export function Composer({
 	streaming,
 	busy,
 	autoFocus = false,
+	inputRef,
 }: Props) {
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const localRef = useRef<HTMLTextAreaElement>(null);
+	const textareaRef = inputRef ?? localRef;
 	const canSend = value.trim() !== "" && !busy;
 
 	useLayoutEffect(() => {
@@ -36,7 +46,7 @@ export function Composer({
 		el.style.height = "auto";
 		el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
 		el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? "auto" : "hidden";
-	}, [value]);
+	}, [value, textareaRef]);
 
 	function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();

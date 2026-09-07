@@ -1,5 +1,5 @@
 import type { Chat } from "../types";
-import { dropTransient, isChat } from "./storage";
+import { dropTransient, isChat, orderMessages } from "./storage";
 
 /**
  * Server-side chat storage for signed-in users. See "API contract" in README.md.
@@ -26,7 +26,7 @@ export async function listChats(signal: AbortSignal): Promise<Chat[] | null> {
 			return null;
 		}
 		const chats = data.chats;
-		return Array.isArray(chats) ? chats.filter(isChat) : null;
+		return Array.isArray(chats) ? chats.filter(isChat).map(orderMessages) : null;
 	} catch {
 		return null;
 	}

@@ -202,6 +202,69 @@ export function swapPanes(root: LayoutNode, aId: string, bId: string): LayoutNod
 	return walk(root);
 }
 
+/**
+ * The pane immediately to the right, or null when this pane is in the
+ * rightmost column. Walks the path back to the deepest row split that was
+ * entered on its left side, then takes the first pane on the right side.
+ */
+export function rightNeighbor(root: LayoutNode, paneId: string): PaneLeaf | null {
+	const splits: SplitNode[] = [];
+	const sides: (0 | 1)[] = [];
+	function find(node: LayoutNode): boolean {
+		if (node.kind === "pane") {
+			return node.id === paneId;
+		}
+		for (const side of [0, 1] as const) {
+			splits.push(node);
+			sides.push(side);
+			if (find(node.children[side])) {
+				return true;
+			}
+			splits.pop();
+			sides.pop();
+		}
+		return false;
+	}
+	if (!find(root)) {
+		return null;
+	}
+	for (let i = splits.length - 1; i >= 0; i--) {
+		if (splits[i].direction === "row" && sides[i] === 0) {
+			return firstPane(splits[i].children[1]);
+		}
+	}
+	return null;
+}
+
+/**
+ * Put a chat next to a pane, preferring the right. Falls back through
+ * replacing the pane already on the right, splitting downward, and finally
+ * taking over the pane itself, so there is always somewhere to land.
+ * Returns the pane the chat ended up in.
+ */
+export function placeBeside(
+	root: LayoutNode,
+	paneId: string,
+	chatId: string | null,
+): { root: LayoutNode; paneId: string } {
+	if (!findPane(root, paneId)) {
+		return { root, paneId };
+	}
+	if (canSplit(root, paneId, "right")) {
+		const split = splitPane(root, paneId, "right", chatId);
+		return { root: split.root, paneId: split.newPaneId };
+	}
+	const neighbor = rightNeighbor(root, paneId);
+	if (neighbor) {
+		return { root: setPaneChat(root, neighbor.id, chatId), paneId: neighbor.id };
+	}
+	if (canSplit(root, paneId, "bottom")) {
+		const split = splitPane(root, paneId, "bottom", chatId);
+		return { root: split.root, paneId: split.newPaneId };
+	}
+	return { root: setPaneChat(root, paneId, chatId), paneId };
+}
+
 /** Every drop target a pane offers for the drag in progress. */
 export type DropAbility = {
 	sides: Record<DropSide, boolean>;
@@ -209,7 +272,8 @@ export type DropAbility = {
 	swap: boolean;
 };
 
-const NO_DROPS: DropAbility = {
+/** Accepts nothing: used where dragging must not rearrange anything. */
+export const NO_DROPS: DropAbility = {
 	sides: { left: false, right: false, top: false, bottom: false, center: false },
 	swap: false,
 };

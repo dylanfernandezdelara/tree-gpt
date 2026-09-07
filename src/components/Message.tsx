@@ -7,8 +7,6 @@ import {
 	CheckIcon,
 	CopyIcon,
 	RegenerateIcon,
-	ThumbsDownIcon,
-	ThumbsUpIcon,
 } from "./Icons";
 
 type Props = {
@@ -21,7 +19,7 @@ type Props = {
 export function MessageView({ message, isLast, onRedo }: Props) {
 	if (message.role === "user") {
 		return (
-			<div className="turn turn--user">
+			<div className="turn turn--user" data-message-id={message.id}>
 				<div className="bubble">{message.content}</div>
 			</div>
 		);
@@ -60,7 +58,7 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 	}
 
 	return (
-		<div className="turn turn--assistant">
+		<div className="turn turn--assistant" data-message-id={message.id}>
 			{message.reasoning ? (
 				<details className="thinking">
 					<summary className="thinking__label">Thought</summary>
@@ -79,7 +77,6 @@ type ActionsProps = { content: string; isLast: boolean; onRedo: () => void };
 
 function AssistantActions({ content, isLast, onRedo }: ActionsProps) {
 	const [copied, setCopied] = useState(false);
-	const [rating, setRating] = useState<"up" | "down" | null>(null);
 
 	useEffect(() => {
 		if (!copied) {
@@ -102,22 +99,6 @@ function AssistantActions({ content, isLast, onRedo }: ActionsProps) {
 		<div className={`actions${isLast ? " actions--visible" : ""}`}>
 			<IconButton label={copied ? "Copied" : "Copy"} className="actions__button" onClick={copy}>
 				{copied ? <CheckIcon /> : <CopyIcon />}
-			</IconButton>
-			<IconButton
-				label="Good response"
-				className="actions__button"
-				aria-pressed={rating === "up"}
-				onClick={() => setRating(rating === "up" ? null : "up")}
-			>
-				<ThumbsUpIcon />
-			</IconButton>
-			<IconButton
-				label="Bad response"
-				className="actions__button"
-				aria-pressed={rating === "down"}
-				onClick={() => setRating(rating === "down" ? null : "down")}
-			>
-				<ThumbsDownIcon />
 			</IconButton>
 			{isLast ? (
 				<IconButton label="Regenerate" className="actions__button" onClick={onRedo}>

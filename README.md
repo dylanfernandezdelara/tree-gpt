@@ -205,3 +205,29 @@ From `worker/tree-types.ts` unless noted:
 - Quota: 60 generations per user per hour → `429` with `Retry-After`
 - Upstream history window (OpenRouter): last 50 turns / 32k chars
 
+### Fork lineage (proposed, needs agreement)
+
+A chat created by forking carries an `origin`, which the frontend already sends on `PUT /api/chats/:id`:
+
+```jsonc
+"origin": {
+  "parentChatId": "…",
+  "kind": "branch" | "thread",   // duplicated pane typed in, or text highlighted
+  "parentMessageId": "…",        // where it diverged, in the PARENT's id space
+  "quote": "…"                   // "thread" only: the highlighted text
+}
+```
+
+`parseChat` ignores unknown fields, so this is currently dropped and `GET /api/chats` does not return it. Until the Worker stores and returns `origin`, the frontend falls back to a local mirror (`treegpt.lineage.<ns>.v1`), so lineage does not survive on another device. The sidebar fork tree and the fork links under a conversation both read this field. Field names are open to change.
+
+### Bookmarks (proposed, needs agreement)
+
+Highlighting a passage and choosing **Bookmark** saves it. There is no bookmarks table yet, so these live only in the browser (`treegpt.bookmarks.<ns>.v1`) and do not follow the user to another device.
+
+```jsonc
+{ "id": "…", "chatId": "…", "messageId": "…", "quote": "…", "createdAt": 1730000000000 }
+```
+
+Routes that would carry it, scoped to the session user like `/api/chats`: `GET /api/bookmarks`, `PUT /api/bookmarks/:id`, `DELETE /api/bookmarks/:id`. Names are open to change.
+
+Shapes mirror the types in `worker/openrouter.ts` (`CompletionMessage`) and `worker/chats.ts` (`ApiChat`/`ApiMessage`), which are the source of truth. Signed-in chats persist per user; guests keep chats in the browser.

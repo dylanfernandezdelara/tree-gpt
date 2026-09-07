@@ -1,14 +1,19 @@
-import type { Chat, Message } from "../types";
 import { DEFAULT_MODEL, isModelId, type ModelId } from "../../worker/tree-types";
+import type { Bookmark, Chat, ForkOrigin, Message } from "../types";
 import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
 /**
  * Browser-side persistence.
  *
- * - `treegpt.ui.v1`: sidebar state and the last open chat per namespace.
+ * - `treegpt.ui.v1`: sidebar state, pane layout, and fork-tree state per namespace.
  * - `treegpt.chats.<namespace>.v1`: chats kept on this device. Used for guests,
  *   and as a per-user fallback while the /api/chats backend is unavailable.
  *   Chats that live on the server are never written here.
+ * - `treegpt.bookmarks.<namespace>.v1`: saved passages. The Worker has no
+ *   bookmarks table yet, so these live only on this device.
+ * - `treegpt.lineage.<namespace>.v1`: fork lineage mirrored locally. The Worker
+ *   does not store `origin` yet, so chats loaded from the server come back
+ *   without it; this keeps the fork tree and fork links working until it does.
  */
 
 export const GUEST_NAMESPACE = "guest";
@@ -16,8 +21,13 @@ export const GUEST_NAMESPACE = "guest";
 const UI_KEY = "treegpt.ui.v1";
 const LEGACY_KEY = "treegpt.state.v1";
 const TITLE_MAX = 40;
+const DEFAULT_BOOKMARKS_WIDTH = 440;
 
 type StoredLayout = { root: unknown; focusedPaneId: string };
+
+/** How the sidebar lists chats: the fork tree, or one flat recent-first list. */
+export type SidebarView = "tree" | "flat";
+export type SidebarTree = { view: SidebarView; expanded: string[] };
 
 type UiState = {
 	sidebarOpen: boolean;
@@ -26,10 +36,21 @@ type UiState = {
 	layout: Record<string, StoredLayout>;
 	/** Global model preference. Unknown or missing values read as DEFAULT_MODEL. */
 	model: ModelId;
+	sidebarTree: Record<string, SidebarTree>;
+	/** Width of the bookmarks list, in px. */
+	bookmarksWidth: number;
 };
 
 function chatsKey(namespace: string): string {
 	return `treegpt.chats.${namespace}.v1`;
+}
+
+function lineageKey(namespace: string): string {
+	return `treegpt.lineage.${namespace}.v1`;
+}
+
+function bookmarksKey(namespace: string): string {
+	return `treegpt.bookmarks.${namespace}.v1`;
 }
 
 function readJson(key: string): unknown {
@@ -68,11 +89,131 @@ function loadUi(): UiState {
 			}
 		}
 	}
+	const sidebarTree: Record<string, SidebarTree> = {};
+	if (typeof record.sidebarTree === "object" && record.sidebarTree !== null) {
+		for (const [ns, saved] of Object.entries(record.sidebarTree as Record<string, unknown>)) {
+			if (typeof saved !== "object" || saved === null) {
+				continue;
+			}
+			const entry = saved as Record<string, unknown>;
+			sidebarTree[ns] = {
+				view: entry.view === "flat" ? "flat" : "tree",
+				expanded: Array.isArray(entry.expanded)
+					? entry.expanded.filter((id): id is string => typeof id === "string")
+					: [],
+			};
+		}
+	}
 	return {
 		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : true,
 		activeChatId: active,
 		layout,
 		model: isModelId(record.model) ? record.model : DEFAULT_MODEL,
+		sidebarTree,
+		bookmarksWidth:
+			typeof record.bookmarksWidth === "number" && record.bookmarksWidth > 0
+				? record.bookmarksWidth
+				: DEFAULT_BOOKMARKS_WIDTH,
+	};
+}
+
+export function loadBookmarksWidth(): number {
+	return loadUi().bookmarksWidth;
+}
+
+export function saveBookmarksWidth(width: number): void {
+	writeJson(UI_KEY, { ...loadUi(), bookmarksWidth: Math.round(width) });
+}
+
+/** Saved passages for a namespace, newest first. */
+export function loadBookmarks(namespace: string): Bookmark[] {
+	const parsed = readJson(bookmarksKey(namespace));
+	if (!Array.isArray(parsed)) {
+		return [];
+	}
+	const out: Bookmark[] = [];
+	for (const value of parsed) {
+		const bookmark = parseBookmark(value);
+		if (bookmark) {
+			out.push(bookmark);
+		}
+	}
+	return out;
+}
+
+export function saveBookmarks(namespace: string, bookmarks: readonly Bookmark[]): void {
+	writeJson(bookmarksKey(namespace), bookmarks);
+}
+
+function parseBookmark(value: unknown): Bookmark | null {
+	if (typeof value !== "object" || value === null) {
+		return null;
+	}
+	const b = value as Record<string, unknown>;
+	if (
+		typeof b.id !== "string" ||
+		typeof b.chatId !== "string" ||
+		typeof b.messageId !== "string" ||
+		typeof b.quote !== "string" ||
+		typeof b.createdAt !== "number"
+	) {
+		return null;
+	}
+	return {
+		id: b.id,
+		chatId: b.chatId,
+		messageId: b.messageId,
+		quote: b.quote,
+		createdAt: b.createdAt,
+	};
+}
+
+/** Defaults to the fork tree with every row closed. */
+export function loadSidebarTree(namespace: string): SidebarTree {
+	return loadUi().sidebarTree[namespace] ?? { view: "tree", expanded: [] };
+}
+
+export function saveSidebarTree(namespace: string, tree: SidebarTree): void {
+	const ui = loadUi();
+	writeJson(UI_KEY, { ...ui, sidebarTree: { ...ui.sidebarTree, [namespace]: tree } });
+}
+
+/**
+ * Fork lineage held on this device, keyed by chat id. Merged into chats that
+ * arrive without an `origin` so lineage survives a server round-trip.
+ */
+export function loadLineage(namespace: string): Record<string, ForkOrigin> {
+	const parsed = readJson(lineageKey(namespace));
+	if (typeof parsed !== "object" || parsed === null) {
+		return {};
+	}
+	const out: Record<string, ForkOrigin> = {};
+	for (const [chatId, value] of Object.entries(parsed as Record<string, unknown>)) {
+		const origin = parseOrigin(value);
+		if (origin) {
+			out[chatId] = origin;
+		}
+	}
+	return out;
+}
+
+export function saveLineage(namespace: string, lineage: Record<string, ForkOrigin>): void {
+	writeJson(lineageKey(namespace), lineage);
+}
+
+export function parseOrigin(value: unknown): ForkOrigin | undefined {
+	if (typeof value !== "object" || value === null) {
+		return undefined;
+	}
+	const o = value as Record<string, unknown>;
+	if (typeof o.parentChatId !== "string" || (o.kind !== "branch" && o.kind !== "thread")) {
+		return undefined;
+	}
+	return {
+		parentChatId: o.parentChatId,
+		kind: o.kind,
+		parentMessageId: typeof o.parentMessageId === "string" ? o.parentMessageId : null,
+		...(typeof o.quote === "string" ? { quote: o.quote } : {}),
 	};
 }
 
@@ -122,7 +263,9 @@ export function saveLayout(namespace: string, root: LayoutNode, focusedPaneId: s
 
 export function loadLocalChats(namespace: string): Chat[] {
 	const parsed = readJson(chatsKey(namespace));
-	return Array.isArray(parsed) ? parsed.filter(isChat).map(dropTransient) : [];
+	return Array.isArray(parsed)
+		? parsed.filter(isChat).map(dropTransient).map(orderMessages)
+		: [];
 }
 
 export function saveLocalChats(namespace: string, chats: Chat[]): void {
@@ -190,10 +333,31 @@ export function isChat(value: unknown): value is Chat {
 }
 
 /**
+ * Messages in the order they were sent. Older exchanges were written with the
+ * question and its reply sharing a timestamp, and the Worker breaks that tie on
+ * the random message id, so a reply can come back above its question. A user
+ * turn always precedes the assistant turn it triggered.
+ */
+export function orderMessages(chat: Chat): Chat {
+	const messages = [...chat.messages].sort((a, b) => {
+		if (a.createdAt !== b.createdAt) {
+			return a.createdAt - b.createdAt;
+		}
+		if (a.role === b.role) {
+			return 0;
+		}
+		return a.role === "user" ? -1 : 1;
+	});
+	const unchanged = messages.every((message, i) => message === chat.messages[i]);
+	return unchanged ? chat : { ...chat, messages };
+}
+
+/**
  * Persistable form of a chat: replies that are still loading or failed are
  * dropped, and each message carries only the fields in the API contract.
  */
 export function dropTransient(chat: Chat): Chat {
+	const origin = parseOrigin(chat.origin);
 	return {
 		id: chat.id,
 		title: chat.title,
@@ -202,6 +366,7 @@ export function dropTransient(chat: Chat): Chat {
 		messages: chat.messages
 			.filter((m) => !m.pending && !m.error)
 			.map((m) => ({ id: m.id, ...persistableFields(m) })),
+		...(origin ? { origin } : {}),
 	};
 }
 

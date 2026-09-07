@@ -25,6 +25,11 @@
 	--brand-hover: #2f74e6;
 	--accent: oklch(0.97 0 0);
 	--danger: #e02e2a;
+	--scrollbar-width: 10px;
+	--scrollbar-thumb-alpha: 0.2;
+	/* Everything renders at this fraction of its natural size, like a browser
+	   zoom, so more conversation fits on screen. */
+	--ui-scale: 0.9;
 	--sidebar-width: 260px;
 	--header-height: 52px;
 	--thread-width: 768px;
@@ -72,6 +77,10 @@
 	box-sizing: border-box;
 }
 
+html {
+	zoom: var(--ui-scale);
+}
+
 html,
 body,
 #root {
@@ -104,7 +113,7 @@ button {
 
 .app {
 	display: flex;
-	height: 100dvh;
+	height: 100%;
 	overflow: hidden;
 }
 
@@ -180,12 +189,48 @@ button {
 }
 
 .sidebar__section {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
 	margin: 20px 0 0;
-	padding: 6px 16px;
+	padding: 6px 8px 6px 16px;
+}
+
+.sidebar__section-label {
+	margin: 0;
 	font-size: 14px;
 	line-height: 20px;
 	font-weight: 500;
 	color: var(--text-tertiary);
+}
+
+.sidebar__section-toggle {
+	width: 28px;
+	height: 28px;
+}
+
+/* Forks hang under their parent behind a connector line. */
+.sidebar__branch {
+	list-style: none;
+}
+
+.sidebar__children {
+	margin: 0 0 0 18px;
+	padding: 0 0 0 10px;
+	border-left: 1px solid var(--border-medium);
+	list-style: none;
+}
+
+.chat-row__toggle {
+	flex-shrink: 0;
+	width: 24px;
+	height: 24px;
+	color: var(--text-tertiary);
+	transition: transform 0.15s ease;
+}
+
+.chat-row__toggle--open {
+	transform: rotate(90deg);
 }
 
 .sidebar__list {
@@ -451,6 +496,26 @@ button {
 }
 
 
+/* Ring a pane when a fork link points at one already open. */
+.pane__flash {
+	position: absolute;
+	inset: 0;
+	z-index: 6;
+	pointer-events: none;
+	animation: pane-flash 0.9s ease-out;
+}
+
+@keyframes pane-flash {
+	0%,
+	100% {
+		box-shadow: inset 0 0 0 2px rgba(58, 131, 247, 0);
+	}
+	25%,
+	75% {
+		box-shadow: inset 0 0 0 2px rgba(58, 131, 247, 0.75);
+	}
+}
+
 /* Narrow panes drop the wide gutters. */
 @container (max-width: 720px) {
 	.thread,
@@ -459,6 +524,63 @@ button {
 		padding-left: 16px;
 		padding-right: 16px;
 	}
+}
+
+/*
+ * A fixed-width scrollbar. The platform overlay bar widens under the pointer
+ * and paints above everything, including the composer fade, so it is styled
+ * explicitly instead. No hover rule: the bar must not change as you reach it.
+ */
+.thread::-webkit-scrollbar,
+.sidebar__nav::-webkit-scrollbar,
+.bookmarks__list::-webkit-scrollbar {
+	width: var(--scrollbar-width);
+}
+
+.thread::-webkit-scrollbar-track,
+.sidebar__nav::-webkit-scrollbar-track,
+.bookmarks__list::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+/*
+ * Hidden at rest and shown while the region scrolls, like the platform overlay
+ * bar; `is-scrolling` is set by useAutoHideScrollbar. The transparent border
+ * thins the thumb without narrowing its hit area.
+ */
+/*
+ * Registering the property lets it be transitioned; a transition on the thumb
+ * itself does nothing, because Chrome does not animate scrollbar
+ * pseudo-elements. Whether the thumb repaints mid-fade is up to the browser,
+ * so treat the fade as a nicety: the bar hides either way.
+ */
+@property --thumb-alpha {
+	syntax: "<number>";
+	inherits: true;
+	initial-value: 0;
+}
+
+.thread,
+.sidebar__nav,
+.bookmarks__list {
+	--thumb-alpha: 0;
+	transition: --thumb-alpha 300ms ease;
+}
+
+.thread.is-scrolling,
+.sidebar__nav.is-scrolling,
+.bookmarks__list.is-scrolling {
+	--thumb-alpha: var(--scrollbar-thumb-alpha);
+	transition-duration: 80ms;
+}
+
+.thread::-webkit-scrollbar-thumb,
+.sidebar__nav::-webkit-scrollbar-thumb,
+.bookmarks__list::-webkit-scrollbar-thumb {
+	border: 3px solid transparent;
+	border-radius: 999px;
+	background-color: rgba(0, 0, 0, var(--thumb-alpha));
+	background-clip: content-box;
 }
 
 /* The scroll region; the composer floats over its bottom edge. */
@@ -474,6 +596,9 @@ button {
 	inset: 0;
 	padding: 0 64px;
 	overflow-y: auto;
+	/* Always reserved, so the fade and the composer line up with the messages
+	   whether or not the conversation is long enough to scroll. */
+	scrollbar-gutter: stable;
 }
 
 .thread__inner {
@@ -502,7 +627,8 @@ button {
 /* Softens content passing beneath and beside the floating composer. */
 .thread-fade {
 	position: absolute;
-	right: 0;
+	/* Stops at the gutter: the scrollbar must never be washed over. */
+	right: var(--scrollbar-width);
 	bottom: 0;
 	left: 0;
 	height: var(--composer-inset);
@@ -517,7 +643,7 @@ button {
 
 .composer-float {
 	position: absolute;
-	right: 0;
+	right: var(--scrollbar-width);
 	bottom: 16px;
 	left: 0;
 	padding: 0 64px;
@@ -531,7 +657,7 @@ button {
 .scroll-to-bottom {
 	position: absolute;
 	bottom: calc(var(--composer-inset) + 12px);
-	left: 50%;
+	left: calc(50% - var(--scrollbar-width) / 2);
 	z-index: 1;
 	display: inline-flex;
 	align-items: center;
@@ -597,10 +723,6 @@ button {
 	width: 32px;
 	height: 32px;
 	color: var(--text-secondary);
-}
-
-.actions__button[aria-pressed="true"] {
-	color: var(--text-primary);
 }
 
 .thinking {
@@ -806,6 +928,116 @@ details > .thinking__label {
 	margin: 16px 0;
 	border: 0;
 	border-top: 1px solid var(--border-medium);
+}
+
+/* Forks of this conversation, listed under its last message. */
+.forks {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	margin-top: 16px;
+}
+
+.fork-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	padding: 4px 8px 4px 0;
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 500;
+	color: var(--accent);
+}
+
+.fork-link:hover .fork-link__title {
+	text-decoration: underline;
+}
+
+.fork-link__title {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* Actions offered beside a highlighted passage. */
+.selection-bar {
+	position: fixed;
+	z-index: 40;
+	display: inline-flex;
+	align-items: stretch;
+	padding: 2px;
+	border-radius: 9999px;
+	background: #fff;
+	box-shadow: var(--menu-shadow);
+	transform: translate(-50%, calc(-100% - 8px));
+}
+
+.selection-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 12px;
+	border-radius: 9999px;
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 500;
+	color: var(--text-primary);
+	white-space: nowrap;
+}
+
+.selection-action:hover {
+	background: var(--surface-hover);
+}
+
+.selection-bar__divider {
+	width: 1px;
+	margin: 6px 0;
+	background: var(--border-medium);
+}
+
+/* Where a saved passage lands, painted without touching the markup. */
+::highlight(treegpt-bookmark) {
+	background: rgba(58, 131, 247, 0.28);
+}
+
+.turn--highlight {
+	border-radius: 12px;
+	background: rgba(58, 131, 247, 0.12);
+	transition: background 0.3s ease;
+}
+
+/* The passage a pane will fork from, shown above its composer. */
+.thread-quote {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	max-width: var(--thread-width);
+	margin: 0 auto 8px;
+	padding: 8px 8px 8px 12px;
+	border-left: 3px solid var(--accent);
+	border-radius: 0 8px 8px 0;
+	background: var(--surface-sidebar);
+}
+
+.thread-quote__text {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	flex: 1;
+	margin: 0;
+	overflow: hidden;
+	font-size: 13px;
+	line-height: 18px;
+	color: var(--text-secondary);
+}
+
+.thread-quote__clear {
+	flex-shrink: 0;
+	width: 24px;
+	height: 24px;
 }
 
 /* ---------- Composer ---------- */
@@ -1458,4 +1690,148 @@ details > .thinking__label {
   html {
     @apply font-sans;
 	}
+}
+
+/* ---------- Bookmarks screen ---------- */
+
+.bookmarks {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+}
+
+.bookmarks__list {
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	min-width: 0;
+	overflow-y: auto;
+	background: var(--surface-main);
+}
+
+/* Nothing open: the saved passages take the whole screen. */
+.bookmarks__list--full {
+	flex: 1;
+}
+
+.bookmarks__header {
+	display: flex;
+	flex-shrink: 0;
+	align-items: baseline;
+	gap: 8px;
+	padding: 16px 20px 12px;
+}
+
+.bookmarks__title {
+	margin: 0;
+	font-size: 18px;
+	line-height: 26px;
+	font-weight: 600;
+}
+
+.bookmarks__count {
+	font-size: 13px;
+	color: var(--text-tertiary);
+}
+
+.bookmarks__empty {
+	margin: 0;
+	padding: 24px 20px;
+	font-size: 14px;
+	line-height: 20px;
+	color: var(--text-tertiary);
+	text-align: center;
+}
+
+.bookmarks__rows {
+	margin: 0;
+	padding: 0 0 16px;
+	list-style: none;
+}
+
+.bookmark-row {
+	position: relative;
+	display: flex;
+	align-items: center;
+	border-bottom: 1px solid var(--border-light);
+}
+
+.bookmark-row:hover {
+	background: var(--surface-hover);
+}
+
+.bookmark-row--open {
+	background: var(--bubble-bg);
+}
+
+.bookmark-row__open {
+	display: flex;
+	flex: 1;
+	align-items: baseline;
+	gap: 10px;
+	min-width: 0;
+	padding: 12px 8px 12px 20px;
+	text-align: left;
+}
+
+.bookmark-row__chat {
+	flex-shrink: 0;
+	width: 108px;
+	overflow: hidden;
+	font-size: 14px;
+	font-weight: 500;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.bookmark-row__date {
+	flex-shrink: 0;
+	width: 62px;
+	font-size: 12px;
+	color: var(--text-tertiary);
+	white-space: nowrap;
+}
+
+.bookmark-row__snippet {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	font-size: 14px;
+	color: var(--text-secondary);
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.bookmark-row__toggle {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	margin-right: 12px;
+	color: var(--accent);
+	opacity: 0;
+}
+
+.bookmark-row:hover .bookmark-row__toggle,
+.bookmark-row__toggle:focus-visible {
+	opacity: 1;
+}
+
+.bookmarks__resizer {
+	flex-shrink: 0;
+	width: 5px;
+	background: var(--border-light);
+	cursor: col-resize;
+	touch-action: none;
+}
+
+.bookmarks__resizer:hover {
+	background: var(--accent);
+}
+
+.bookmarks__panes {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
 }
