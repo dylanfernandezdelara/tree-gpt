@@ -1,8 +1,8 @@
 import { authClient } from "../auth-client";
 
 /**
- * Helpers around the shared Better Auth client (`src/auth-client.ts`, which
- * owns the plugin setup). It talks to /api/auth/* on the Worker.
+ * Helpers around the shared Better Auth client (`src/auth-client.ts`).
+ * It talks to /api/auth/* on the Worker.
  */
 export { authClient };
 

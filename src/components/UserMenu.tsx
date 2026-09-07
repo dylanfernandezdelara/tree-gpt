@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { authClient, avatarColor, initials, type AuthUser } from "../lib/auth-client";
-import { LogOutIcon, PasskeyIcon } from "./Icons";
+import { avatarColor, initials, type AuthUser } from "../lib/auth-client";
+import { LogOutIcon } from "./Icons";
 
 type Props = {
 	user: AuthUser;
@@ -11,13 +11,8 @@ type Props = {
 	onLogOut: () => void;
 };
 
-const passkeysSupported =
-	typeof window !== "undefined" && typeof window.PublicKeyCredential !== "undefined";
-
 export function UserMenu({ user, placement, compact = false, onLogOut }: Props) {
 	const [open, setOpen] = useState(false);
-	const [notice, setNotice] = useState<string | null>(null);
-	const [busy, setBusy] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -42,22 +37,6 @@ export function UserMenu({ user, placement, compact = false, onLogOut }: Props) 
 		};
 	}, [open]);
 
-	async function addPasskey() {
-		if (busy) {
-			return;
-		}
-		setBusy(true);
-		setNotice(null);
-		try {
-			const result = await authClient.passkey.addPasskey();
-			setNotice(result?.error ? result.error.message || "Couldn't add a passkey." : "Passkey added.");
-		} catch {
-			setNotice("Couldn't add a passkey.");
-		} finally {
-			setBusy(false);
-		}
-	}
-
 	return (
 		<div ref={wrapRef} className="user-menu-wrap">
 			<button
@@ -68,7 +47,6 @@ export function UserMenu({ user, placement, compact = false, onLogOut }: Props) 
 				aria-label={compact ? "Account menu" : undefined}
 				title={compact ? user.name : undefined}
 				onClick={() => {
-					setNotice(null);
 					setOpen((value) => !value);
 				}}
 			>
@@ -84,18 +62,6 @@ export function UserMenu({ user, placement, compact = false, onLogOut }: Props) 
 				<div className={`user-menu user-menu--${placement}`} role="menu">
 					<div className="user-menu__email">{user.email}</div>
 					<div className="user-menu__divider" />
-					{passkeysSupported ? (
-						<button
-							type="button"
-							role="menuitem"
-							className="user-menu__item"
-							disabled={busy}
-							onClick={addPasskey}
-						>
-							<PasskeyIcon />
-							{busy ? "Adding passkey…" : "Add passkey"}
-						</button>
-					) : null}
 					<button
 						type="button"
 						role="menuitem"
@@ -108,7 +74,6 @@ export function UserMenu({ user, placement, compact = false, onLogOut }: Props) 
 						<LogOutIcon />
 						Log out
 					</button>
-					{notice ? <div className="user-menu__notice">{notice}</div> : null}
 				</div>
 			) : null}
 		</div>

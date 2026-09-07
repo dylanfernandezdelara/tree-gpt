@@ -1,4 +1,3 @@
-import { passkey } from "@better-auth/passkey";
 import { betterAuth } from "better-auth";
 
 export function createAuth(env: Env, request: Request) {
@@ -19,13 +18,6 @@ export function createAuth(env: Env, request: Request) {
 				clientSecret: env.GITHUB_CLIENT_SECRET,
 			},
 		},
-		plugins: [
-			passkey({
-				rpID: url.hostname,
-				rpName: "treeGPT",
-				origin,
-			}),
-		],
 		databaseHooks: {
 			user: {
 				create: {
@@ -48,6 +40,27 @@ export async function handleAuthRequest(
 	env: Env,
 ): Promise<Response> {
 	return createAuth(env, request).handler(request);
+}
+
+export async function getSessionUser(
+	request: Request,
+	env: Env,
+): Promise<{ id: string; email: string } | null> {
+	const session = await createAuth(env, request).api.getSession({
+		headers: request.headers,
+	});
+	const user = session?.user;
+	if (!user?.id || !user.email) {
+		return null;
+	}
+	return { id: user.id, email: user.email };
+}
+
+export async function ensureDomainUser(
+	db: D1Database,
+	user: { id: string; email: string },
+): Promise<void> {
+	await syncDomainUser(db, user);
 }
 
 async function syncDomainUser(

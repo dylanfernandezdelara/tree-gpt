@@ -10,7 +10,7 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'better-auth/react', '@better-auth/passkey/client'],
+    include: ['react', 'react-dom', 'better-auth/react'],
     exclude: ['better-auth', '@better-auth/kysely-adapter', 'better-auth/db/migration'],
   },
 })

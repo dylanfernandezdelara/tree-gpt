@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AuthDialog, type AuthMode } from "./components/AuthDialog";
+import { LoginPage } from "./LoginPage";
 import { ChatThread } from "./components/ChatThread";
 import { Composer } from "./components/Composer";
 import { EmptyState } from "./components/EmptyState";
@@ -8,7 +8,7 @@ import { ComposeIcon, SidebarIcon } from "./components/Icons";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
 import { sendChat, type ChatTurn } from "./lib/api";
-import { authClient, sessionUser } from "./lib/auth-client";
+import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
 import { placeholderReply } from "./lib/placeholder";
 import {
@@ -42,17 +42,33 @@ type Store = {
 };
 
 function App() {
+	const session = authClient.useSession();
+	const user = sessionUser(session.data);
+
+	if (session.isPending) {
+		return (
+			<div className="login-page">
+				<p className="login-page__status">Checking session…</p>
+			</div>
+		);
+	}
+
+	if (!user) {
+		return <LoginPage />;
+	}
+
+	return <ChatApp user={user} />;
+}
+
+function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
 	const [draft, setDraft] = useState("");
 	const [pendingChatId, setPendingChatId] = useState<string | null>(null);
-	const [authDialog, setAuthDialog] = useState<AuthMode | null>(null);
 	const controllerRef = useRef<AbortController | null>(null);
 	const syncRef = useRef<RemoteSync | null>(null);
 
-	const session = authClient.useSession();
-	const user = sessionUser(session.data);
-	const namespace = session.isPending ? null : user ? `user:${user.id}` : GUEST_NAMESPACE;
+	const namespace = `user:${user.id}`;
 	// A store from another namespace is stale while the new one loads.
 	const active = store && store.ns === namespace ? store : null;
 
@@ -301,27 +317,8 @@ function App() {
 						</>
 					)}
 					<div className="main__header-spacer" />
-					{session.isPending ? null : user ? (
-						sidebarOpen ? null : (
-							<UserMenu user={user} placement="down" compact onLogOut={logOut} />
-						)
-					) : (
-						<div className="main__auth">
-							<button
-								type="button"
-								className="pill-button pill-button--primary"
-								onClick={() => setAuthDialog("login")}
-							>
-								Log in
-							</button>
-							<button
-								type="button"
-								className="pill-button pill-button--secondary"
-								onClick={() => setAuthDialog("signup")}
-							>
-								Sign up for free
-							</button>
-						</div>
+					{sidebarOpen ? null : (
+						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
 					)}
 				</header>
 				{activeChat && activeChat.messages.length > 0 ? (
@@ -336,14 +333,6 @@ function App() {
 					<EmptyState>{composer}</EmptyState>
 				)}
 			</main>
-			{authDialog ? (
-				<AuthDialog
-					mode={authDialog}
-					onModeChange={setAuthDialog}
-					onClose={() => setAuthDialog(null)}
-					onSuccess={() => setAuthDialog(null)}
-				/>
-			) : null}
 		</div>
 	);
 }

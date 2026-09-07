@@ -22,7 +22,7 @@ npm run db:migrate:local
 npm run dev
 ```
 
-Open http://localhost:5173. Use `localhost`, not `127.0.0.1`, so passkeys work.
+Open http://localhost:5173. Use `localhost`, not `127.0.0.1`.
 
 ```bash
 npm run db:migrate:remote   # production D1, before or with deploy
@@ -66,10 +66,6 @@ Until these routes exist, the frontend keeps a signed-in user's chats in the bro
 
 ### Auth (Better Auth)
 
-The frontend uses the shared client in `src/auth-client.ts` (`better-auth/react` with the passkey plugin) and expects the Better Auth handler at `/api/auth/*`. The sign-in dialog offers:
-
-- **GitHub** via `signIn.social({ provider: "github" })` — works with the current `worker/auth.ts`.
-- **Passkey** via `signIn.passkey()`, with "Add passkey" in the account menu — works with the current `worker/auth.ts`.
-- **Email + password** via `signIn.email` / `signUp.email` (name, email, password) — **backend TODO:** set `emailAndPassword: { enabled: true }` in `worker/auth.ts`; until then this path returns Better Auth's "not enabled" error.
+The frontend uses the shared client in `src/auth-client.ts` and expects the Better Auth handler at `/api/auth/*`. Signed-out users see a dedicated login page with **Continue with GitHub** (`signIn.social({ provider: "github" })`).
 
 The frontend reads the session with `useSession()` and treats anything without a `user` object as signed out.

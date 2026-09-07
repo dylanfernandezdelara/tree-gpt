@@ -17,7 +17,7 @@ npm run db:migrate:local
 npm run dev
 ```
 
-Use `localhost`, not `127.0.0.1`, so passkeys match the WebAuthn rpID.
+Use `localhost`, not `127.0.0.1`.
 
 ## Models
 
