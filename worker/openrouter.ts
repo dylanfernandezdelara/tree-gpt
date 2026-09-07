@@ -167,6 +167,10 @@ export async function requestCompletion(
 		// from the response (the model still reasons and bills for it); it
 		// keeps the non-streaming reply small so the reader is not left
 		// waiting on thinking bytes, and leaves nothing to store or echo.
+		// `exclude` is part of the unified reasoning object all OpenRouter
+		// models accept, and the live catalog lists `minimal` in this
+		// model's supported_efforts with reasoning mandatory — so this is
+		// the fastest legal setting, no fallback needed.
 		max_tokens: 4096,
 		reasoning: { effort: "minimal", exclude: true },
 	};
