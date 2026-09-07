@@ -3,7 +3,6 @@ import { LoginPage } from "./LoginPage";
 import { ChatPane } from "./components/ChatPane";
 import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
-import { ModelSelector } from "./components/ModelSelector";
 import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
@@ -35,6 +34,7 @@ import {
 	titleFromMessage,
 } from "./lib/storage";
 import type { Chat, Message } from "./types";
+import type { ModelId } from "../worker/tree-types";
 
 const SYNC_DEBOUNCE_MS = 500;
 const NO_CHATS: Chat[] = [];
@@ -77,6 +77,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
 	const [model, setModel] = useState(loadSelectedModel);
+	/** Model locked to each chat at its first send. Fresh chats use the global preference. */
+	const [chatModels, setChatModels] = useState<Record<string, ModelId>>({});
 	/** Composer text per pane id. */
 	const [drafts, setDrafts] = useState<Record<string, string>>({});
 	/** Chats with a reply in flight (one request per chat; chats run concurrently). */
@@ -237,6 +239,15 @@ function ChatApp({ user }: { user: AuthUser }) {
 		setDrafts((prev) => ({ ...prev, [paneId]: value }));
 	}
 
+	function modelFor(chatId: string): ModelId {
+		return chatModels[chatId] ?? model;
+	}
+
+	/** First send wins: later calls for the same chat are no-ops. */
+	function lockModel(chatId: string, value: ModelId): void {
+		setChatModels((prev) => (prev[chatId] === undefined ? { ...prev, [chatId]: value } : prev));
+	}
+
 	async function request(chatId: string, replyId: string, history: ChatTurn[], requestModel: typeof model) {
 		pendingRef.current.get(chatId)?.abort();
 		const controller = new AbortController();
@@ -326,6 +337,9 @@ function ChatApp({ user }: { user: AuthUser }) {
 		setDraft(paneId, "");
 
 		if (chat && shared) {
+			// A branch continues the same conversation, so it inherits the
+			// source chat's locked model rather than the global preference.
+			const sendModel = modelFor(chat.id);
 			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
 			const branched: Chat = {
 				id: newId(),
@@ -334,20 +348,23 @@ function ChatApp({ user }: { user: AuthUser }) {
 				createdAt: now,
 				updatedAt: now,
 			};
+			lockModel(branched.id, sendModel);
 			updateStore((prev) => ({
 				...prev,
 				chats: [branched, ...prev.chats],
 				layout: setPaneChat(prev.layout, paneId, branched.id),
 			}));
-			void request(branched.id, reply.id, history, model);
+			void request(branched.id, reply.id, history, sendModel);
 		} else if (chat) {
+			const sendModel = modelFor(chat.id);
+			lockModel(chat.id, sendModel);
 			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
 			updateChat(chat.id, (current) => ({
 				...current,
 				updatedAt: now,
 				messages: [...current.messages, userMessage, reply],
 			}));
-			void request(chat.id, reply.id, history, model);
+			void request(chat.id, reply.id, history, sendModel);
 		} else {
 			const created: Chat = {
 				id: newId(),
@@ -356,6 +373,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 				createdAt: now,
 				updatedAt: now,
 			};
+			lockModel(created.id, model);
 			updateStore((prev) => ({
 				...prev,
 				chats: [created, ...prev.chats],
@@ -383,13 +401,15 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (history.length === 0) {
 			return;
 		}
+		const sendModel = modelFor(chat.id);
+		lockModel(chat.id, sendModel);
 		setReply(chat.id, messageId, {
 			content: "",
 			pending: true,
 			error: false,
 			reasoning: undefined,
 		});
-		void request(chat.id, messageId, history, model);
+		void request(chat.id, messageId, history, sendModel);
 	}
 
 	function stop(paneId: string) {
@@ -458,7 +478,6 @@ function ChatApp({ user }: { user: AuthUser }) {
 							</IconButton>
 						</>
 					)}
-					<ModelSelector value={model} onChange={setModel} />
 					<div className="main__header-spacer" />
 					{sidebarOpen ? null : (
 						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
@@ -481,6 +500,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 										draft={drafts[pane.id] ?? ""}
 										streaming={streaming}
 										busy={streaming}
+										model={model}
+										onModelChange={setModel}
 										onFocus={() => focusPane(pane.id)}
 										onClose={() => closePane(pane.id)}
 										onDraftChange={(value) => setDraft(pane.id, value)}

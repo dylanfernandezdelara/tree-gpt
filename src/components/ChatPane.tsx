@@ -12,6 +12,8 @@ import { Composer } from "./Composer";
 import { EmptyState } from "./EmptyState";
 import { IconButton } from "./IconButton";
 import { CloseIcon } from "./Icons";
+import { ModelSelector } from "./ModelSelector";
+import type { ModelId } from "../../worker/tree-types";
 
 type Props = {
 	pane: PaneLeaf;
@@ -22,6 +24,9 @@ type Props = {
 	draft: string;
 	streaming: boolean;
 	busy: boolean;
+	/** Global model preference, rendered below this pane's composer. */
+	model: ModelId;
+	onModelChange: (model: ModelId) => void;
 	onFocus: () => void;
 	onClose: () => void;
 	onDraftChange: (value: string) => void;
@@ -41,6 +46,8 @@ export function ChatPane({
 	draft,
 	streaming,
 	busy,
+	model,
+	onModelChange,
 	onFocus,
 	onClose,
 	onDraftChange,
@@ -135,7 +142,12 @@ export function ChatPane({
 			{chat && chat.messages.length > 0 ? (
 				<ChatThread chat={chat} onRedo={onRedo} composer={composer} />
 			) : (
-				<EmptyState>{composer}</EmptyState>
+				<EmptyState>
+					<div className="composer-stack">
+						{composer}
+						<ModelSelector value={model} onChange={onModelChange} />
+					</div>
+				</EmptyState>
 			)}
 			<div
 				className={`pane__drop${dropSide ? ` pane__drop--visible pane__drop--${dropSide}` : ""}`}
