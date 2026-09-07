@@ -1,4 +1,5 @@
 import { getSessionUser } from "./auth.js";
+import { isRole } from "./tree-types.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const CHAT_MODEL = "meta/muse-spark-1.3-contributor";
@@ -62,13 +63,7 @@ export async function handleOpenRouterRequest(
 	// Only validated requests that would reach OpenRouter consume quota.
 	const limit = await checkRateLimit(env.DB, user.id, Date.now());
 	if (!limit.ok) {
-		return Response.json(
-			{ ok: false, error: "Rate limit exceeded, try again later" },
-			{
-				status: 429,
-				headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) },
-			},
-		);
+		return rateLimitResponse(limit.retryAfterMs);
 	}
 
 	if (parsed.stream) {
@@ -317,8 +312,18 @@ export async function requestStreamCompletion(
 	return sseResponse(opened.events);
 }
 
+export function rateLimitResponse(retryAfterMs: number): Response {
+	return Response.json(
+		{ ok: false, error: "Rate limit exceeded, try again later" },
+		{
+			status: 429,
+			headers: { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) },
+		},
+	);
+}
+
 /** Wraps an event object stream as a text/event-stream Response. */
-export function sseResponse(events: ReadableStream<UpstreamEvent>): Response {
+export function sseResponse<T extends { type: string }>(events: ReadableStream<T>): Response {
 	return new Response(events.pipeThrough(encodeSse()), {
 		headers: {
 			"Content-Type": "text/event-stream",
@@ -606,10 +611,6 @@ export function capHistory(messages: CompletionMessage[]): CompletionMessage[] {
 	}
 
 	return recent.slice(start);
-}
-
-function isRole(value: unknown): value is CompletionRole {
-	return value === "user" || value === "assistant";
 }
 
 type ParsedUpstream = {

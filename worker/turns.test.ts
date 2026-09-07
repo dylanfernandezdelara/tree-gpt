@@ -3,8 +3,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser } from "./auth.js";
-import { loadPath, summaryFor } from "./tree.js";
-import type { ChatRow, ChatSummary, MessageRow } from "./tree-types.js";
+import { makeDb } from "./testing/d1.js";
+import { loadPath, summaryFor, type ChatRow, type MessageRow } from "./tree.js";
+import type { ChatSummary } from "./tree-types.js";
 import { PENDING_TIMEOUT_MS } from "./tree-types.js";
 import { abandonTurn, handleTurnRequest, planTurn, reserveTurn } from "./turns.js";
 
@@ -32,41 +33,6 @@ vi.mock("./tree.js", async (importOriginal) => {
 		})),
 	};
 });
-
-type RecordedStatement = { sql: string; params: unknown[] };
-
-type BatchResult = { meta: { changes: number } };
-
-function makeDb(hooks: {
-	first?: (sql: string, params: unknown[]) => Promise<unknown>;
-	all?: (sql: string, params: unknown[]) => Promise<{ results: unknown[] }>;
-	run?: (sql: string, params: unknown[]) => Promise<{ meta: { changes: number } }>;
-	batch?: (stmts: RecordedStatement[]) => Promise<BatchResult[]>;
-}) {
-	const statements: RecordedStatement[] = [];
-	const db = {
-		prepare: vi.fn((sql: string) => ({
-			bind: (...params: unknown[]) => {
-				const recorded: RecordedStatement = { sql, params };
-				statements.push(recorded);
-				return {
-					sql,
-					params,
-					first: () => hooks.first?.(sql, params) ?? Promise.resolve(undefined),
-					all: () => hooks.all?.(sql, params) ?? Promise.resolve({ results: [] }),
-					run: () => hooks.run?.(sql, params) ?? Promise.resolve({ meta: { changes: 1 } }),
-				};
-			},
-		})),
-		batch: vi.fn(async (stmts: RecordedStatement[]) => {
-			if (hooks.batch) {
-				return hooks.batch(stmts);
-			}
-			return stmts.map(() => ({ meta: { changes: 1 } }));
-		}),
-	};
-	return { db: db as unknown as D1Database, statements };
-}
 
 const envWith = (db: D1Database, extra: Record<string, unknown> = {}) =>
 	({

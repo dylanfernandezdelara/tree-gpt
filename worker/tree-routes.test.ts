@@ -1,74 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser } from "./auth.js";
+import { chatRow, makeDb, messageRow } from "./testing/d1.js";
 import { handleTreeRequest } from "./tree-routes.js";
 import { GC_ROOT_SQL } from "./tree.js";
-import { MAX_TITLE, type ChatRow, type MessageRow } from "./tree-types.js";
+import { MAX_TITLE } from "./tree-types.js";
 
 vi.mock("./auth.js", () => ({
 	getSessionUser: vi.fn(async () => ({ id: "user-1", email: "user@example.com" })),
 	ensureDomainUser: vi.fn(async () => {}),
 }));
 
-type RecordedStatement = { sql: string; params: unknown[] };
-
-function makeDb(hooks: {
-	first?: (sql: string, params: unknown[]) => Promise<unknown>;
-	all?: (sql: string, params: unknown[]) => Promise<{ results: unknown[] }>;
-	run?: (sql: string, params: unknown[]) => Promise<{ meta: { changes: number } }>;
-	batch?: (statements: D1PreparedStatement[]) => Promise<unknown>;
-}) {
-	const statements: RecordedStatement[] = [];
-	const db = {
-		prepare: vi.fn((sql: string) => ({
-			bind: (...params: unknown[]) => {
-				statements.push({ sql, params });
-				return {
-					first: () => hooks.first?.(sql, params) ?? Promise.resolve(undefined),
-					all: () => hooks.all?.(sql, params) ?? Promise.resolve({ results: [] }),
-					run: () => hooks.run?.(sql, params) ?? Promise.resolve({ meta: { changes: 1 } }),
-				};
-			},
-		})),
-		batch: vi.fn(async (batchStatements: D1PreparedStatement[]) => {
-			if (hooks.batch) {
-				return hooks.batch(batchStatements);
-			}
-			return [];
-		}),
-	};
-	return { db: db as unknown as D1Database, statements, batch: db.batch };
-}
-
 const envWith = (db: D1Database) => ({ DB: db }) as unknown as Env;
 
-function chatRow(overrides: Partial<ChatRow> = {}): ChatRow {
-	return {
-		id: "chat-1",
-		user_id: "user-1",
-		root_id: "m1",
-		leaf_id: "m2",
-		title: "Test chat",
-		created_at: 1,
-		updated_at: 2,
-		...overrides,
-	};
-}
-
-function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
-	return {
+const leafRow = (overrides: Parameters<typeof messageRow>[0] = {}) =>
+	messageRow({
 		id: "m2",
-		user_id: "user-1",
-		root_id: "m1",
 		parent_id: "m1",
 		depth: 1,
 		role: "assistant",
 		status: "done",
 		content: "hello",
-		reasoning: null,
 		created_at: 2,
 		...overrides,
-	};
-}
+	});
 
 function request(path: string, init?: RequestInit): Request {
 	return new Request(`http://localhost:5173${path}`, init);
@@ -148,7 +102,7 @@ describe("handleTreeRequest", () => {
 					return chatRow();
 				}
 				if (sql.includes("FROM messages") && !sql.includes("WITH RECURSIVE")) {
-					return messageRow();
+					return leafRow();
 				}
 				return undefined;
 			},
@@ -166,7 +120,7 @@ describe("handleTreeRequest", () => {
 						reasoning: null,
 						created_at: 1,
 					},
-					messageRow(),
+					leafRow(),
 				],
 			}),
 		});
@@ -256,7 +210,7 @@ describe("handleTreeRequest", () => {
 				if (sql.includes("FROM chats")) {
 					return chatRow({ title: "Renamed", updated_at: 99 });
 				}
-				return messageRow();
+				return leafRow();
 			},
 		});
 		const response = await handleTreeRequest(

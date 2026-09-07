@@ -6,12 +6,23 @@ import { ensureDomainUser, getSessionUser } from "./auth.js";
 import {
 	capHistory,
 	checkRateLimit,
-	encodeSse,
 	openStreamCompletion,
+	rateLimitResponse,
+	sseResponse,
 	type CompletionMessage,
 	type UpstreamEvent,
 } from "./openrouter.js";
-import { PATH_CTE, loadPath, summaryFor } from "./tree.js";
+import {
+	fail,
+	loadChatRow,
+	loadMessageRow,
+	loadPath,
+	loadPathRows,
+	loadSummary,
+	summaryFor,
+	type ChatRow,
+	type MessageRow,
+} from "./tree.js";
 import { parseTurnRequest, type ParsedTurn } from "./turn-request.js";
 import {
 	MAX_CHATS,
@@ -19,11 +30,8 @@ import {
 	MAX_MESSAGES_PER_ROOT,
 	MAX_REASONING,
 	PENDING_TIMEOUT_MS,
-	isRole,
 	type ApiMessage,
-	type ChatRow,
 	type ChatSummary,
-	type MessageRow,
 	type TurnRequest,
 	type TurnStreamEvent,
 } from "./tree-types.js";
@@ -71,24 +79,24 @@ export async function handleTurnRequest(
 	chatId: string,
 ): Promise<Response> {
 	if (request.method !== "POST") {
-		return jsonError(405, "Use POST");
+		return fail(405, "Use POST");
 	}
 
 	const user = await getSessionUser(request, env);
 	if (!user) {
-		return jsonError(401, "Unauthorized");
+		return fail(401, "Unauthorized");
 	}
 
 	let raw: unknown;
 	try {
 		raw = await request.json();
 	} catch {
-		return jsonError(400, "Invalid JSON body");
+		return fail(400, "Invalid JSON body");
 	}
 
 	const parsed = parseTurnRequest(raw);
 	if (!parsed.ok) {
-		return jsonError(400, parsed.error);
+		return fail(400, parsed.error);
 	}
 	const body = parsed.value;
 	const now = Date.now();
@@ -107,13 +115,7 @@ export async function handleTurnRequest(
 
 	const limit = await checkRateLimit(env.DB, user.id, now);
 	if (!limit.ok) {
-		return Response.json(
-			{ ok: false, error: "Rate limit exceeded, try again later" },
-			{
-				status: 429,
-				headers: { "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)) },
-			},
-		);
+		return rateLimitResponse(limit.retryAfterMs);
 	}
 
 	if (body.parentId === null && !plan.sourceChat) {
@@ -132,14 +134,7 @@ export async function handleTurnRequest(
 	});
 	if (!opened.ok) {
 		await abandonTurn(env.DB, user.id, reserved.replyId, plan.fallbackLeaf);
-		return Response.json(
-			{
-				ok: false,
-				error: opened.error.message,
-				details: opened.error.details,
-			},
-			{ status: opened.error.status },
-		);
+		return fail(opened.error.status, opened.error.message, { details: opened.error.details });
 	}
 
 	const persist: PersistFns = {
@@ -161,13 +156,7 @@ export async function handleTurnRequest(
 	ctx.waitUntil(terminal);
 
 	if (body.stream) {
-		return new Response(toTurnStream(clientBranch, terminal).pipeThrough(encodeSse()), {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-			},
-		});
+		return sseResponse(toTurnStream(clientBranch, terminal));
 	}
 
 	void clientBranch.cancel().catch(() => {});
@@ -177,10 +166,9 @@ export async function handleTurnRequest(
 		case "done":
 			return Response.json({ ok: true, chat: result.chat, messages: result.messages });
 		case "error":
-			return Response.json(
-				{ ok: false, error: result.error, details: result.details },
-				{ status: result.error === REPLY_ABANDONED ? 409 : 502 },
-			);
+			return fail(result.error === REPLY_ABANDONED ? 409 : 502, result.error, {
+				details: result.details,
+			});
 		default: {
 			const unseen: never = result;
 			return unseen;
@@ -206,13 +194,13 @@ export async function planTurn(
 			return { ok: false, response: attachedConflict("Chat already exists", sourceChat, leaf, now) };
 		}
 		if (body.fork) {
-			return { ok: false, response: jsonError(400, "fork is not allowed when creating a chat") };
+			return { ok: false, response: fail(400, "fork is not allowed when creating a chat") };
 		}
 		if (!sourceChat && (await countChats(db, userId)) >= MAX_CHATS) {
-			return { ok: false, response: jsonError(400, "Chat limit reached") };
+			return { ok: false, response: fail(400, "Chat limit reached") };
 		}
 		if (!body.userMessage) {
-			return { ok: false, response: jsonError(400, "parentId is required for redo") };
+			return { ok: false, response: fail(400, "parentId is required for redo") };
 		}
 		const reserveCase = reserveCaseFor(chatId, userId, body, sourceChat, cutoff);
 		return { ok: true, plan: finishPlan({
@@ -231,7 +219,7 @@ export async function planTurn(
 	}
 
 	if (!sourceChat) {
-		return { ok: false, response: jsonError(404, "Not found") };
+		return { ok: false, response: fail(404, "Not found") };
 	}
 	if (sourceChat.leaf_id !== body.expectLeaf) {
 		// Cheap early CAS so a stale client is not charged quota. Reserve re-checks atomically.
@@ -241,21 +229,21 @@ export async function planTurn(
 
 	const parent = await loadMessageRow(db, userId, body.parentId);
 	if (!parent) {
-		return { ok: false, response: jsonError(404, "Parent not found") };
+		return { ok: false, response: fail(404, "Parent not found") };
 	}
 	if (sourceChat.root_id === null || parent.root_id !== sourceChat.root_id) {
-		return { ok: false, response: jsonError(400, "Parent is not in this chat") };
+		return { ok: false, response: fail(400, "Parent is not in this chat") };
 	}
 	if (parent.status !== "done") {
-		return { ok: false, response: jsonError(409, "Parent reply is not finished") };
+		return { ok: false, response: fail(409, "Parent reply is not finished") };
 	}
 	if (!body.userMessage && parent.role !== "user") {
-		return { ok: false, response: jsonError(400, "Redo requires a user message parent") };
+		return { ok: false, response: fail(400, "Redo requires a user message parent") };
 	}
 
 	const replyDepth = parent.depth + (body.userMessage ? 2 : 1);
 	if (replyDepth >= MAX_DEPTH) {
-		return { ok: false, response: jsonError(400, "Conversation is too deep") };
+		return { ok: false, response: fail(400, "Conversation is too deep") };
 	}
 
 	const nodesToAdd = body.userMessage ? 2 : 1;
@@ -264,7 +252,7 @@ export async function planTurn(
 		.bind(userId, parent.root_id)
 		.first<{ n: number }>();
 	if ((rootCount?.n ?? 0) + nodesToAdd > MAX_MESSAGES_PER_ROOT) {
-		return { ok: false, response: jsonError(400, "Tree is too large") };
+		return { ok: false, response: fail(400, "Tree is too large") };
 	}
 
 	if (body.fork) {
@@ -273,17 +261,16 @@ export async function planTurn(
 			.bind(body.fork.chatId)
 			.first<{ id: string }>();
 		if (existingFork) {
-			const forkChat = await loadChatRow(db, userId, body.fork.chatId);
-			const leaf = forkChat?.leaf_id ? await loadMessageRow(db, userId, forkChat.leaf_id) : null;
+			const forkSummary = await loadSummary(db, userId, body.fork.chatId, now);
 			return {
 				ok: false,
-				response: forkChat
-					? attachedConflict("Fork target already exists", forkChat, leaf, now)
-					: jsonError(409, "Fork target already exists"),
+				response: forkSummary
+					? fail(409, "Fork target already exists", { chat: forkSummary })
+					: fail(409, "Fork target already exists"),
 			};
 		}
 		if ((await countChats(db, userId)) >= MAX_CHATS) {
-			return { ok: false, response: jsonError(400, "Chat limit reached") };
+			return { ok: false, response: fail(400, "Chat limit reached") };
 		}
 	}
 
@@ -386,7 +373,7 @@ export async function reserveTurn(
 
 	const chat = await loadChatRow(db, userId, plan.targetChatId);
 	if (!chat) {
-		return { ok: false, response: jsonError(500, "Reserved chat is missing") };
+		return { ok: false, response: fail(500, "Reserved chat is missing") };
 	}
 
 	return { ok: true, chat, parentId: plan.replyParentId, replyId: body.replyId, rootId: plan.rootId };
@@ -423,12 +410,15 @@ export async function completeTurn(
 		return { ok: false };
 	}
 
-	const chat = await loadChatRow(db, userId, targetChatId);
+	const chat = await loadSummary(db, userId, targetChatId, now);
 	if (!chat) {
 		throw new Error("Chat not found after complete");
 	}
-	const leaf = chat.leaf_id ? await loadMessageRow(db, userId, chat.leaf_id) : null;
-	return { ok: true, chat: summaryFor(chat, leaf, now), messages: await loadPath(db, chat) };
+	return {
+		ok: true,
+		chat,
+		messages: await loadPath(db, { user_id: userId, leaf_id: chat.leafId }),
+	};
 }
 
 /**
@@ -461,17 +451,8 @@ export async function historyFor(
 	userId: string,
 	parentId: string,
 ): Promise<CompletionMessage[]> {
-	const result = await db
-		.prepare(`${PATH_CTE} SELECT role, content FROM path WHERE status = 'done' ORDER BY depth`)
-		.bind(parentId, userId)
-		.all<{ role: string; content: string }>();
-	const messages: CompletionMessage[] = [];
-	for (const row of result.results) {
-		if (isRole(row.role)) {
-			messages.push({ role: row.role, content: row.content });
-		}
-	}
-	return capHistory(messages);
+	const rows = await loadPathRows(db, userId, parentId, { doneOnly: true });
+	return capHistory(rows.map((row) => ({ role: row.role, content: row.content })));
 }
 
 /** Persistence tee branch. Accumulates deltas, then complete or abandon. Never throws. */
@@ -590,15 +571,14 @@ async function replyOutcome(
 	now: number,
 ): Promise<Response> {
 	if (reply.status === "done") {
-		const chat = await loadChatRow(db, userId, targetChatId);
+		const chat = await loadSummary(db, userId, targetChatId, now);
 		if (!chat) {
-			return jsonError(404, "Not found");
+			return fail(404, "Not found");
 		}
-		const leaf = chat.leaf_id ? await loadMessageRow(db, userId, chat.leaf_id) : null;
 		return Response.json({
 			ok: true,
-			chat: summaryFor(chat, leaf, now),
-			messages: await loadPath(db, chat),
+			chat,
+			messages: await loadPath(db, { user_id: userId, leaf_id: chat.leafId }),
 		});
 	}
 
@@ -667,7 +647,7 @@ async function countChats(db: D1Database, userId: string): Promise<number> {
 }
 
 function attachedConflict(error: string, chat: ChatRow, leaf: MessageRow | null, now: number): Response {
-	return Response.json({ ok: false, error, chat: summaryFor(chat, leaf, now) }, { status: 409 });
+	return fail(409, error, { chat: summaryFor(chat, leaf, now) });
 }
 
 function reserveCaseFor(
@@ -742,22 +722,6 @@ function pointerStatement(
 		.bind(plan.targetChatId, userId, plan.rootId, replyId, plan.title, now, now, ...guard.binds);
 }
 
-async function loadChatRow(db: D1Database, userId: string, chatId: string): Promise<ChatRow | null> {
-	const row = await db
-		.prepare(`SELECT id, user_id, root_id, leaf_id, title, created_at, updated_at FROM chats WHERE id = ? AND user_id = ?`)
-		.bind(chatId, userId)
-		.first<ChatRow>();
-	return row ?? null;
-}
-
-async function loadMessageRow(db: D1Database, userId: string, messageId: string): Promise<MessageRow | null> {
-	const row = await db
-		.prepare(`SELECT id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at FROM messages WHERE id = ? AND user_id = ?`)
-		.bind(messageId, userId)
-		.first<MessageRow>();
-	return row ?? null;
-}
-
 async function conflictWithChat(
 	db: D1Database,
 	userId: string,
@@ -765,14 +729,6 @@ async function conflictWithChat(
 	error: string,
 	now: number,
 ): Promise<Response> {
-	const chat = await loadChatRow(db, userId, chatId);
-	const leaf = chat?.leaf_id ? await loadMessageRow(db, userId, chat.leaf_id) : null;
-	return Response.json(
-		{ ok: false, error, ...(chat ? { chat: summaryFor(chat, leaf, now) } : {}) },
-		{ status: 409 },
-	);
-}
-
-function jsonError(status: number, error: string): Response {
-	return Response.json({ ok: false, error }, { status });
+	const chat = await loadSummary(db, userId, chatId, now);
+	return fail(409, error, chat ? { chat } : {});
 }

@@ -1,8 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser } from "./auth.js";
-import { handleChatsRequest } from "./chats.js";
-import { gcRoot, isShared, loadAllPaths } from "./tree.js";
-import { MAX_CHATS, PENDING_TIMEOUT_MS, type ApiChat, type MessageRow } from "./tree-types.js";
+import {
+	ALL_PATHS_SQL,
+	CHATS_LIST_SQL,
+	IS_SHARED_SQL,
+	handleChatsRequest,
+	isShared,
+	loadAllPaths,
+} from "./chats.js";
+import { chatRow, makeDb, type RecordedStatement } from "./testing/d1.js";
+import { gcRoot, type MessageRow } from "./tree.js";
+import { MAX_CHATS, PENDING_TIMEOUT_MS } from "./tree-types.js";
 
 vi.mock("./auth.js", () => ({
 	getSessionUser: vi.fn(async () => ({ id: "user-1", email: "user@example.com" })),
@@ -13,52 +21,11 @@ vi.mock("./tree.js", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./tree.js")>();
 	return {
 		...actual,
-		loadAllPaths: vi.fn(async () => []),
-		isShared: vi.fn(async () => false),
-		loadPath: vi.fn(async () => []),
 		gcRoot: vi.fn((db: D1Database, userId: string, rootId: string) =>
 			actual.gcRoot(db, userId, rootId),
 		),
 	};
 });
-
-type RecordedStatement = { sql: string; params: unknown[] };
-
-function makeDb(hooks: {
-	first?: (sql: string, params: unknown[]) => Promise<unknown>;
-	all?: (sql: string, params: unknown[]) => Promise<{ results: unknown[] }>;
-	batchResult?: (stmt: RecordedStatement, index: number) => { meta: { changes: number } };
-}) {
-	const statements: RecordedStatement[] = [];
-	const batch = vi.fn(async (stmts: RecordedStatement[]) =>
-		stmts.map((stmt, index) => hooks.batchResult?.(stmt, index) ?? { meta: { changes: 1 } }),
-	);
-	const db = {
-		prepare: vi.fn((sql: string) => ({
-			bind: (...params: unknown[]) => {
-				const statement: RecordedStatement & {
-					first: () => Promise<unknown>;
-					all: () => Promise<{ results: unknown[] }>;
-					run: () => Promise<{ meta: { changes: number } }>;
-				} = {
-					sql,
-					params,
-					first: () => hooks.first?.(sql, params) ?? Promise.resolve(undefined),
-					all: () => hooks.all?.(sql, params) ?? Promise.resolve({ results: [] }),
-					run: () => Promise.resolve({ meta: { changes: 1 } }),
-				};
-				statements.push(statement);
-				return statement;
-			},
-		})),
-		batch,
-	};
-	return {
-		db: db as unknown as D1Database,
-		statements,
-		getBatch: () => (batch.mock.calls[0]?.[0] ?? []) as RecordedStatement[],
-	};
-}
 
 const envWith = (db: D1Database) => ({ DB: db }) as unknown as Env;
 
@@ -121,6 +88,7 @@ async function putRequest(
 		count?: number;
 		body?: Record<string, unknown>;
 		urlId?: string;
+		shared?: boolean;
 		batchResult?: (stmt: RecordedStatement, index: number) => { meta: { changes: number } };
 	} = {},
 ) {
@@ -129,6 +97,9 @@ async function putRequest(
 		first: async (sql) => {
 			if (sql.includes("COUNT(*)")) {
 				return { n: hooks.count ?? 0 };
+			}
+			if (sql === IS_SHARED_SQL) {
+				return { shared: hooks.shared ? 1 : 0 };
 			}
 			if (sql.includes("FROM chats")) {
 				return hooks.chat === undefined ? undefined : hooks.chat;
@@ -156,7 +127,7 @@ async function putRequest(
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(hooks.body ?? chatBody(messages)),
 	});
-	const response = await handleChatsRequest(request, envWith(db));
+	const response = await handleChatsRequest(request, envWith(db), urlId);
 	return { response, db, statements, batch: getBatch() };
 }
 
@@ -164,8 +135,6 @@ describe("handleChatsRequest", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(getSessionUser).mockResolvedValue({ id: USER_ID, email: "user@example.com" });
-		vi.mocked(isShared).mockResolvedValue(false);
-		vi.mocked(loadAllPaths).mockResolvedValue([]);
 	});
 
 	it("PUT drops legacy blobs but stores the display-only trace", async () => {
@@ -224,7 +193,7 @@ describe("handleChatsRequest", () => {
 	});
 
 	it("GET delegates to loadAllPaths and returns its result unchanged under chats", async () => {
-		const chats: ApiChat[] = [
+		const chats = [
 			{
 				id: "chat-1",
 				title: "t",
@@ -242,15 +211,48 @@ describe("handleChatsRequest", () => {
 				],
 			},
 		];
-		vi.mocked(loadAllPaths).mockResolvedValue(chats);
-		const { db } = makeDb({});
+		const { db } = makeDb({
+			all: async (sql) => {
+				if (sql === CHATS_LIST_SQL) {
+					return {
+						results: [chatRow({ title: "t", created_at: 1, updated_at: 2 })],
+					};
+				}
+				return {
+					results: [
+						{
+							chat_id: "chat-1",
+							id: "m1",
+							parent_id: null,
+							depth: 0,
+							role: "user",
+							status: "done",
+							content: "hi",
+							reasoning: null,
+							created_at: 1,
+						},
+						{
+							chat_id: "chat-1",
+							id: "m2",
+							parent_id: "m1",
+							depth: 1,
+							role: "assistant",
+							status: "done",
+							content: "hello",
+							reasoning: "Considering the question.",
+							created_at: 2,
+						},
+					],
+				};
+			},
+		});
 
 		const response = await handleChatsRequest(
 			new Request("http://localhost:5173/api/chats"),
 			envWith(db),
+			null,
 		);
 		expect(response.status).toBe(200);
-		expect(loadAllPaths).toHaveBeenCalledWith(db, USER_ID);
 		const body = (await response.json()) as {
 			chats: { messages: Record<string, unknown>[] }[];
 		};
@@ -265,11 +267,15 @@ describe("handleChatsRequest", () => {
 	});
 
 	it("GET returns 500 when loadAllPaths throws", async () => {
-		vi.mocked(loadAllPaths).mockRejectedValue(new Error("boom"));
-		const { db } = makeDb({});
+		const { db } = makeDb({
+			all: async () => {
+				throw new Error("boom");
+			},
+		});
 		const response = await handleChatsRequest(
 			new Request("http://localhost:5173/api/chats"),
 			envWith(db),
+			null,
 		);
 		expect(response.status).toBe(500);
 		expect(await response.json()).toEqual({ ok: false, error: "Could not load chats" });
@@ -281,6 +287,7 @@ describe("handleChatsRequest", () => {
 		const response = await handleChatsRequest(
 			new Request("http://localhost:5173/api/chats"),
 			envWith(db),
+			null,
 		);
 		expect(response.status).toBe(401);
 		expect(await response.json()).toEqual({ ok: false, error: "Unauthorized" });
@@ -321,8 +328,6 @@ describe("PUT reconcile", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.mocked(getSessionUser).mockResolvedValue({ id: USER_ID, email: "user@example.com" });
-		vi.mocked(isShared).mockResolvedValue(false);
-		vi.mocked(loadAllPaths).mockResolvedValue([]);
 	});
 
 	it("new chat with 2 messages inserts nodes then the chats row", async () => {
@@ -439,7 +444,7 @@ describe("PUT reconcile", () => {
 			{ id: "m1", role: "user", content: "a", created_at: 1 },
 			{ id: "m2", role: "assistant", content: "old", created_at: 2, reasoning: "think" },
 		]);
-		const { response, batch } = await putRequest(
+		const { response, batch, statements } = await putRequest(
 			[
 				{ id: "m1", role: "user", content: "a", createdAt: 1 },
 				{ id: "m2", role: "assistant", content: "new", createdAt: 2, reasoning: "think" },
@@ -447,7 +452,13 @@ describe("PUT reconcile", () => {
 			{ chat: existingChat(path), path },
 		);
 		expect(response.status).toBe(200);
-		expect(isShared).toHaveBeenCalledWith(expect.anything(), USER_ID, "m2", CHAT_ID);
+		expect(statements.some((statement) => statement.sql === IS_SHARED_SQL)).toBe(true);
+		expect(statements.find((statement) => statement.sql === IS_SHARED_SQL)?.params).toEqual([
+			USER_ID,
+			CHAT_ID,
+			"m2",
+			"m2",
+		]);
 		const messageUpdate = batch.filter((s) => s.sql.includes("UPDATE messages SET content"));
 		expect(messageUpdate).toHaveLength(1);
 		expect(messageUpdate[0]?.params).toEqual(["new", "think", "m2", USER_ID, CHAT_ID, USER_ID, "m2"]);
@@ -456,7 +467,6 @@ describe("PUT reconcile", () => {
 	});
 
 	it("in-place content edit on a shared node is a 409 and writes nothing", async () => {
-		vi.mocked(isShared).mockResolvedValue(true);
 		const path = linearPath([
 			{ id: "m1", role: "user", content: "a", created_at: 1 },
 			{ id: "m2", role: "assistant", content: "old", created_at: 2 },
@@ -466,7 +476,7 @@ describe("PUT reconcile", () => {
 				{ id: "m1", role: "user", content: "a", createdAt: 1 },
 				{ id: "m2", role: "assistant", content: "new", createdAt: 2 },
 			],
-			{ chat: existingChat(path), path },
+			{ chat: existingChat(path), path, shared: true },
 		);
 		expect(response.status).toBe(409);
 		expect(batch).toHaveLength(0);
@@ -477,7 +487,7 @@ describe("PUT reconcile", () => {
 			{ id: "m1", role: "user", content: "a", created_at: 1 },
 			{ id: "m2", role: "assistant", content: "b", created_at: 2 },
 		]);
-		const { response, batch } = await putRequest(
+		const { response, batch, statements } = await putRequest(
 			[
 				{ id: "m1", role: "user", content: "a", createdAt: 1 },
 				{ id: "m2", role: "assistant", content: "b", createdAt: 2 },
@@ -488,7 +498,7 @@ describe("PUT reconcile", () => {
 		expect(batch).toHaveLength(1);
 		expect(batch[0]?.sql).toContain("UPDATE chats");
 		expect(batch[0]?.params).toEqual(["m2", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID, "m2"]);
-		expect(isShared).not.toHaveBeenCalled();
+		expect(statements.every((statement) => statement.sql !== IS_SHARED_SQL)).toBe(true);
 	});
 
 	it("fresh pending leaf returns 409 and writes nothing", async () => {
@@ -630,3 +640,112 @@ describe("PUT reconcile", () => {
 		expect(pointer?.params.at(-1)).toBe("m2");
 	});
 });
+
+describe("loadAllPaths", () => {
+	it("groups by chat, omits pending rows, and keeps updated_at desc order", async () => {
+		const chats = [
+			chatRow({ id: "chat-new", title: "Newer", updated_at: 20, created_at: 1, leaf_id: "m2" }),
+			chatRow({ id: "chat-old", title: "Older", updated_at: 10, created_at: 2, leaf_id: "m3" }),
+			chatRow({
+				id: "chat-empty",
+				title: "Empty",
+				updated_at: 5,
+				created_at: 3,
+				leaf_id: null,
+				root_id: null,
+			}),
+		];
+		const { db, statements } = makeDb({
+			all: async (sql) => {
+				if (sql === CHATS_LIST_SQL) {
+					return { results: chats };
+				}
+				return {
+					results: [
+						{
+							chat_id: "chat-new",
+							id: "m1",
+							parent_id: null,
+							depth: 0,
+							role: "user",
+							status: "done",
+							content: "hi",
+							reasoning: null,
+							created_at: 1,
+						},
+						{
+							chat_id: "chat-new",
+							id: "m2",
+							parent_id: "m1",
+							depth: 1,
+							role: "assistant",
+							status: "pending",
+							content: "",
+							reasoning: null,
+							created_at: 2,
+						},
+						{
+							chat_id: "chat-old",
+							id: "m1",
+							parent_id: null,
+							depth: 0,
+							role: "user",
+							status: "done",
+							content: "hi",
+							reasoning: null,
+							created_at: 1,
+						},
+						{
+							chat_id: "chat-old",
+							id: "m3",
+							parent_id: "m1",
+							depth: 1,
+							role: "assistant",
+							status: "done",
+							content: "hello",
+							reasoning: "trace",
+							created_at: 3,
+						},
+					],
+				};
+			},
+		});
+
+		const result = await loadAllPaths(db, "user-1");
+		expect(statements[0]?.sql).toBe(CHATS_LIST_SQL);
+		expect(statements[0]?.sql).toMatch(/ORDER BY updated_at DESC, created_at DESC/);
+		expect(statements[0]?.params).toEqual(["user-1"]);
+		expect(statements[1]?.sql).toBe(ALL_PATHS_SQL);
+		expect(statements[1]?.params).toEqual(["user-1", "user-1"]);
+		expect(result.map((chat) => chat.id)).toEqual(["chat-new", "chat-old", "chat-empty"]);
+		expect(result[0]?.messages).toEqual([{ id: "m1", role: "user", content: "hi", createdAt: 1 }]);
+		expect(result[1]?.messages).toEqual([
+			{ id: "m1", role: "user", content: "hi", createdAt: 1 },
+			{
+				id: "m3",
+				role: "assistant",
+				content: "hello",
+				createdAt: 3,
+				reasoning: "trace",
+			},
+		]);
+		expect(result[2]?.messages).toEqual([]);
+		for (const chat of result) {
+			expect(chat.messages.some((message) => message.pending)).toBe(false);
+		}
+	});
+});
+
+describe("isShared", () => {
+	it("binds userId, excludingChatId, nodeId, nodeId", async () => {
+		const { db, statements } = makeDb({
+			first: async () => ({ shared: 1 }),
+		});
+		const shared = await isShared(db, "user-1", "node-9", "chat-a");
+		expect(shared).toBe(true);
+		expect(statements).toHaveLength(1);
+		expect(statements[0]?.sql).toBe(IS_SHARED_SQL);
+		expect(statements[0]?.params).toEqual(["user-1", "chat-a", "node-9", "node-9"]);
+	});
+});
+

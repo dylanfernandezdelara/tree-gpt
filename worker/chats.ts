@@ -9,7 +9,15 @@
  * this route (the client id is already taken), so that is a 409.
  */
 import { ensureDomainUser, getSessionUser } from "./auth.js";
-import { gcRoot, isShared, loadAllPaths, PATH_CTE } from "./tree.js";
+import {
+	CHAT_COLUMNS,
+	fail,
+	gcRoot,
+	loadPathRows,
+	toApiMessage,
+	type ChatRow,
+	type MessageRow,
+} from "./tree.js";
 import {
 	MAX_CHATS,
 	MAX_CONTENT,
@@ -22,14 +30,54 @@ import {
 	isTimestamp,
 	type ApiChat,
 	type ApiMessage,
-	type ChatRow,
-	type MessageRow,
+	type Role,
 } from "./tree-types.js";
 
-const SELECT_CHAT = `SELECT id, user_id, root_id, leaf_id, title, created_at, updated_at FROM chats WHERE id = ?`;
+const SELECT_CHAT = `SELECT ${CHAT_COLUMNS} FROM chats WHERE id = ?`;
 const SELECT_CHAT_COUNT = `SELECT COUNT(*) AS n FROM chats WHERE user_id = ?`;
 const SELECT_LEAF_STATUS = `SELECT status, created_at FROM messages WHERE id = ? AND user_id = ?`;
-const SELECT_PATH_DONE = `${PATH_CTE} SELECT * FROM path WHERE status = 'done' ORDER BY depth ASC`;
+
+export const CHATS_LIST_SQL = `
+	SELECT ${CHAT_COLUMNS}
+	FROM chats
+	WHERE user_id = ?
+	ORDER BY updated_at DESC, created_at DESC`;
+
+/**
+ * One recursive walk of every non-null leaf of the user's chats.
+ * Bind order: (userId, userId).
+ */
+export const ALL_PATHS_SQL = `
+	WITH RECURSIVE path(chat_id, id, parent_id, depth, role, status, content, reasoning, created_at) AS (
+		SELECT c.id, m.id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.created_at
+		FROM chats c
+		JOIN messages m ON m.id = c.leaf_id AND m.user_id = c.user_id
+		WHERE c.user_id = ?
+		UNION ALL
+		SELECT p.chat_id, m.id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.created_at
+		FROM messages m
+		JOIN path p ON m.id = p.parent_id AND m.user_id = ?
+	)
+	SELECT * FROM path ORDER BY chat_id, depth`;
+
+/**
+ * True iff nodeId is on another chat's path in the same root.
+ * Bind order: (userId, excludingChatId, nodeId, nodeId).
+ */
+export const IS_SHARED_SQL = `
+	WITH RECURSIVE path(id, parent_id) AS (
+		SELECT m.id, m.parent_id
+		FROM chats c
+		JOIN messages m ON m.id = c.leaf_id AND m.user_id = c.user_id
+		WHERE c.user_id = ?
+		  AND c.id != ?
+		  AND c.root_id = (SELECT root_id FROM messages WHERE id = ?)
+		UNION ALL
+		SELECT m.id, m.parent_id
+		FROM messages m
+		JOIN path p ON m.id = p.parent_id
+	)
+	SELECT EXISTS(SELECT 1 FROM path WHERE id = ?) AS shared`;
 const UPDATE_MESSAGE = `UPDATE messages SET content = ?, reasoning = ? WHERE id = ? AND user_id = ?`;
 const UPDATE_REATTACHED = `UPDATE messages SET content = ?, reasoning = ?, status = 'done' WHERE id = ? AND user_id = ?`;
 const INSERT_MESSAGE = `INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at) SELECT ?, ?, ?, ?, ?, ?, 'done', ?, ?, ?`;
@@ -64,33 +112,90 @@ type InPlaceEdit = {
 	reasoning: string | null;
 };
 
+type PathNodeRow = {
+	chat_id: string;
+	id: string;
+	parent_id: string | null;
+	depth: number;
+	role: Role;
+	status: "pending" | "done";
+	content: string;
+	reasoning: string | null;
+	created_at: number;
+};
+
+/**
+ * Invariant: one path per chat of the user, keyed by chat id, in a bounded
+ * number of queries (not one per chat). Pending rows are omitted because the
+ * compat shape has no pending concept.
+ */
+export async function loadAllPaths(db: D1Database, userId: string): Promise<ApiChat[]> {
+	const chatResult = await db.prepare(CHATS_LIST_SQL).bind(userId).all<ChatRow>();
+	const chats = chatResult.results;
+	if (chats.length === 0) {
+		return [];
+	}
+
+	const pathResult = await db.prepare(ALL_PATHS_SQL).bind(userId, userId).all<PathNodeRow>();
+	const byChat = new Map<string, ApiMessage[]>();
+	for (const row of pathResult.results) {
+		if (row.status === "pending") {
+			continue;
+		}
+		const list = byChat.get(row.chat_id) ?? [];
+		list.push(toApiMessage(row));
+		byChat.set(row.chat_id, list);
+	}
+
+	return chats.map((chat) => ({
+		id: chat.id,
+		title: chat.title,
+		createdAt: chat.created_at,
+		updatedAt: chat.updated_at,
+		messages: byChat.get(chat.id) ?? [],
+	}));
+}
+
+/**
+ * Invariant: true iff `nodeId` lies on the path of some chat of this user
+ * other than `excludingChatId`. Used by the compat PUT to refuse in-place
+ * edits of nodes another chat also renders.
+ */
+export async function isShared(
+	db: D1Database,
+	userId: string,
+	nodeId: string,
+	excludingChatId: string,
+): Promise<boolean> {
+	const row = await db
+		.prepare(IS_SHARED_SQL)
+		.bind(userId, excludingChatId, nodeId, nodeId)
+		.first<{ shared: number }>();
+	return (row?.shared ?? 0) !== 0;
+}
+
 export async function handleChatsRequest(
 	request: Request,
 	env: Env,
+	chatId: string | null,
 ): Promise<Response> {
-	const url = new URL(request.url);
 	const user = await getSessionUser(request, env);
 	if (!user) {
-		return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+		return fail(401, "Unauthorized");
 	}
 
-	if (url.pathname === "/api/chats") {
+	if (chatId === null) {
 		if (request.method !== "GET") {
-			return Response.json({ ok: false, error: "Use GET" }, { status: 405 });
+			return fail(405, "Use GET");
 		}
 		return listCallerChats(env.DB, user.id);
-	}
-
-	const chatId = parseChatId(url.pathname);
-	if (!chatId) {
-		return Response.json({ ok: false, error: "Not found" }, { status: 404 });
 	}
 
 	if (request.method === "PUT") {
 		return replaceChat(request, env, user, chatId);
 	}
 
-	return Response.json({ ok: false, error: "Use PUT" }, { status: 405 });
+	return fail(405, "Use PUT");
 }
 
 async function listCallerChats(db: D1Database, userId: string): Promise<Response> {
@@ -98,7 +203,7 @@ async function listCallerChats(db: D1Database, userId: string): Promise<Response
 		const chats = await loadAllPaths(db, userId);
 		return Response.json({ chats });
 	} catch {
-		return Response.json({ ok: false, error: "Could not load chats" }, { status: 500 });
+		return fail(500, "Could not load chats");
 	}
 }
 
@@ -112,22 +217,22 @@ async function replaceChat(
 	try {
 		body = await request.json();
 	} catch {
-		return Response.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+		return fail(400, "Invalid JSON body");
 	}
 
 	const parsed = parseChat(body);
 	if (!parsed.ok) {
-		return Response.json({ ok: false, error: parsed.error }, { status: 400 });
+		return fail(400, parsed.error);
 	}
 
 	if (parsed.chat.id !== chatId) {
-		return Response.json({ ok: false, error: "Chat id must match the URL" }, { status: 400 });
+		return fail(400, "Chat id must match the URL");
 	}
 
 	const existing = await env.DB.prepare(SELECT_CHAT).bind(chatId).first<ChatRow>();
 
 	if (existing && existing.user_id !== user.id) {
-		return Response.json({ ok: false, error: "Not found" }, { status: 404 });
+		return fail(404, "Not found");
 	}
 
 	if (!existing) {
@@ -135,7 +240,7 @@ async function replaceChat(
 			.bind(user.id)
 			.first<{ n: number }>();
 		if ((countRow?.n ?? 0) >= MAX_CHATS) {
-			return Response.json({ ok: false, error: "Chat limit reached" }, { status: 400 });
+			return fail(400, "Chat limit reached");
 		}
 	}
 
@@ -148,7 +253,7 @@ async function replaceChat(
 			.first<{ status: string; created_at: number }>();
 		if (leaf?.status === "pending") {
 			if (Date.now() - leaf.created_at < PENDING_TIMEOUT_MS) {
-				return Response.json({ ok: false, error: "Chat is generating" }, { status: 409 });
+				return fail(409, "Chat is generating");
 			}
 			stalePendingLeafId = existing.leaf_id;
 		}
@@ -159,7 +264,7 @@ async function replaceChat(
 
 	const prefix = await resolvePrefixEdits(env.DB, user.id, chatId, path, incoming);
 	if (!prefix.ok) {
-		return Response.json({ ok: false, error: prefix.error }, { status: prefix.status });
+		return fail(prefix.status, prefix.error);
 	}
 
 	const plan = buildReconcileBatch(
@@ -177,13 +282,13 @@ async function replaceChat(
 	try {
 		const results = await env.DB.batch(plan.statements);
 		if ((results[plan.pointerIndex]?.meta.changes ?? 0) === 0) {
-			return Response.json({ ok: false, error: "Chat changed, reload" }, { status: 409 });
+			return fail(409, "Chat changed, reload");
 		}
 		if (plan.gcRootId) {
 			await env.DB.batch(gcRoot(env.DB, user.id, plan.gcRootId));
 		}
 	} catch {
-		return Response.json({ ok: false, error: "Could not save chat" }, { status: 500 });
+		return fail(500, "Could not save chat");
 	}
 
 	return Response.json({ chat: parsed.chat });
@@ -197,8 +302,7 @@ async function loadDonePath(
 	if (!chat.leaf_id) {
 		return [];
 	}
-	const result = await db.prepare(SELECT_PATH_DONE).bind(chat.leaf_id, userId).all<MessageRow>();
-	return result.results;
+	return loadPathRows(db, userId, chat.leaf_id, { doneOnly: true });
 }
 
 /**
@@ -471,26 +575,6 @@ function pointerRootId(path: MessageRow[], incoming: ApiMessage[], k: number): s
 		return path[0]?.id ?? null;
 	}
 	return incoming[0]?.id ?? null;
-}
-
-function parseChatId(pathname: string): string | null {
-	const prefix = "/api/chats/";
-	if (!pathname.startsWith(prefix)) {
-		return null;
-	}
-
-	let raw = pathname.slice(prefix.length);
-	try {
-		raw = decodeURIComponent(raw);
-	} catch {
-		return null;
-	}
-
-	if (raw.includes("/") || !isId(raw)) {
-		return null;
-	}
-
-	return raw;
 }
 
 function parseChat(

@@ -69,7 +69,7 @@ export type TurnRequest = {
 	userMessage?: { id: string; content: string };
 	/** Idempotency key for the assistant reply. Replay never regenerates. */
 	replyId: string;
-	/** Only when :id is being created. */
+	/** Ignored unless :id is being created. */
 	title?: string;
 	/** True = SSE response (TurnStreamEvent). Absent = JSON TurnResponse. */
 	stream?: boolean;
@@ -89,29 +89,6 @@ export type TurnStreamEvent =
 	| { type: "content"; text: string }
 	| { type: "done"; chat: ChatSummary; messages: ApiMessage[] }
 	| { type: "error"; error: string; details?: string };
-
-export type ChatRow = {
-	id: string;
-	user_id: string;
-	root_id: string | null;
-	leaf_id: string | null;
-	title: string;
-	created_at: number;
-	updated_at: number;
-};
-
-export type MessageRow = {
-	id: string;
-	user_id: string;
-	root_id: string;
-	parent_id: string | null;
-	depth: number;
-	role: string;
-	status: string;
-	content: string;
-	reasoning: string | null;
-	created_at: number;
-};
 
 export function isRole(value: unknown): value is Role {
 	return value === "user" || value === "assistant";
