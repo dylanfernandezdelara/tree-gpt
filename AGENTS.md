@@ -21,8 +21,6 @@ Use `localhost`, not `127.0.0.1`.
 
 ## Models
 
-Use **OpenRouter free models only**. Do not call paid models until we explicitly cut over.
+Default model for all OpenRouter chat completions: `meta/muse-spark-1.3-contributor` (Muse Spark 1.3 contributor tier).
 
-- Default model: `openrouter/free` (OpenRouter's free-model router)
-- If you pick a specific model, it must have a `:free` suffix (for example `minimax/minimax-m3:free`)
-- Do not use paid slugs, latest aliases, or any model that would incur usage charges
+Do not switch models unless we explicitly ask.
