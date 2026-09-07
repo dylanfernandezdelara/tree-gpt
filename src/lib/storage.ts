@@ -117,12 +117,7 @@ export function saveLocalChats(namespace: string, chats: Chat[]): void {
 	writeJson(chatsKey(namespace), chats.map(dropTransient));
 }
 
-export function newId(): string {
-	if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-		return crypto.randomUUID();
-	}
-	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
+export { newId } from "./id";
 
 /** Sidebar title for a chat, taken from its first user message. */
 export function titleFromMessage(text: string): string {

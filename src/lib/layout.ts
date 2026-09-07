@@ -4,6 +4,8 @@
  * leaves untouched subtrees as the same object.
  */
 
+import { newId } from "./id";
+
 export type PaneLeaf = { kind: "pane"; id: string; chatId: string | null };
 export type SplitDirection = "row" | "column";
 export type SplitNode = {
@@ -24,15 +26,8 @@ export const MAX_PANES = 8;
 /** Fraction of a pane's width/height that counts as an edge zone. */
 const EDGE_FRACTION = 0.25;
 
-function randomId(): string {
-	if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-		return crypto.randomUUID();
-	}
-	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 export function createPane(chatId: string | null = null): PaneLeaf {
-	return { kind: "pane", id: randomId(), chatId };
+	return { kind: "pane", id: newId(), chatId };
 }
 
 export function listPanes(root: LayoutNode): PaneLeaf[] {
@@ -85,7 +80,7 @@ export function splitPane(
 	const freshFirst = side === "left" || side === "top";
 	const next = replaceLeaf(root, paneId, (leaf) => ({
 		kind: "split",
-		id: randomId(),
+		id: newId(),
 		direction,
 		children: freshFirst ? [fresh, leaf] : [leaf, fresh],
 	}));
