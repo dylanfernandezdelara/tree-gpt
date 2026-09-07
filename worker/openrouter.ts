@@ -165,15 +165,16 @@ export async function requestCompletion(
 		model: string;
 		messages: OpenRouterMessage[];
 		max_tokens: number;
-		reasoning: { effort: "medium" };
+		reasoning: { effort: "minimal" };
 		session_id?: string;
 	} = {
 		model: CHAT_MODEL,
 		messages: toOpenRouterMessages(messages),
-		// Muse Spark spends most of max_tokens on hidden reasoning. 1024 often
-		// finishes with content: null and finish_reason "length".
+		// Muse Spark still spends some of max_tokens on hidden reasoning even
+		// at "minimal". 1024 often finishes with content: null and
+		// finish_reason "length".
 		max_tokens: 4096,
-		reasoning: { effort: "medium" },
+		reasoning: { effort: "minimal" },
 	};
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
