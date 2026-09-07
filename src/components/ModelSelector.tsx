@@ -21,14 +21,7 @@ type Props = {
 
 /** Logo provider per allowlisted model (models.dev artwork). */
 function providerFor(model: ModelId): string {
-  switch (model) {
-    case "openai/gpt-5.6-luna":
-      return "openai";
-    case "qwen/qwen3.7-flash":
-      return "alibaba";
-    default:
-      return "meta";
-  }
+  return model === "openai/gpt-5.6-luna" ? "openai" : "meta";
 }
 
 export function ModelSelector({ value, onChange }: Props) {

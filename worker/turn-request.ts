@@ -1,8 +1,17 @@
 /** Body validation for POST /api/chats/:id/turns. Shape only; no DB access. */
-import type { ModelId, TurnRequest } from "./tree-types.js";
-import { DEFAULT_MODEL, MAX_CONTENT, MAX_TITLE, isId, isModelId } from "./tree-types.js";
+import type { EffortId, ModelId, TurnRequest } from "./tree-types.js";
+import {
+	DEFAULT_EFFORT,
+	DEFAULT_MODEL,
+	MAX_CONTENT,
+	MAX_TITLE,
+	MODEL_EFFORTS,
+	isEffortId,
+	isId,
+	isModelId,
+} from "./tree-types.js";
 
-export type ParsedTurn = TurnRequest & { stream: boolean; model: ModelId };
+export type ParsedTurn = TurnRequest & { stream: boolean; model: ModelId; effort: EffortId };
 
 export function parseTurnRequest(body: unknown): { ok: true; value: ParsedTurn } | { ok: false; error: string } {
 	if (typeof body !== "object" || body === null) {
@@ -89,6 +98,17 @@ export function parseTurnRequest(body: unknown): { ok: true; value: ParsedTurn }
 		model = body.model;
 	}
 
+	let effort: EffortId = DEFAULT_EFFORT[model];
+	if ("effort" in body && body.effort !== undefined) {
+		if (!isEffortId(body.effort)) {
+			return { ok: false, error: "effort is not supported" };
+		}
+		if (!MODEL_EFFORTS[model].includes(body.effort)) {
+			return { ok: false, error: "effort is not supported by this model" };
+		}
+		effort = body.effort;
+	}
+
 	if (!userMessage && body.parentId === null) {
 		return { ok: false, error: "parentId is required for redo" };
 	}
@@ -110,6 +130,7 @@ export function parseTurnRequest(body: unknown): { ok: true; value: ParsedTurn }
 			...(title ? { title } : {}),
 			stream,
 			model,
+			effort,
 		},
 	};
 }

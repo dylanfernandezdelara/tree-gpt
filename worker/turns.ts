@@ -132,6 +132,7 @@ export async function handleTurnRequest(
 		sessionId: reserved.rootId,
 		origin: new URL(request.url).origin,
 		model: body.model,
+		effort: body.effort,
 	});
 	if (!opened.ok) {
 		await abandonTurn(env.DB, user.id, reserved.replyId, plan.fallbackLeaf);

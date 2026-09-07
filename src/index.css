@@ -1163,14 +1163,69 @@ details > .thinking__label {
 	display: block;
 }
 
-.model-selector {
-	display: inline-flex;
+.picker-row {
+	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 20px;
 	width: 100%;
 	max-width: var(--thread-width);
 	margin: 4px auto 0;
 	padding: 2px 20px;
+}
+
+.model-selector {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.effort-selector {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.effort-selector__label {
+	font-size: 13px;
+	line-height: 18px;
+	color: var(--text-tertiary);
+	white-space: nowrap;
+}
+
+.effort-selector__trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 8px;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	background: transparent;
+	font-size: 13px;
+	line-height: 18px;
+	font-weight: 500;
+	color: var(--text-secondary);
+	cursor: pointer;
+}
+
+.effort-selector__trigger:hover {
+	background: var(--surface-hover);
+	color: var(--text-primary);
+}
+
+.effort-selector__trigger:focus-visible {
+	outline: 2px solid var(--brand);
+	outline-offset: -2px;
+}
+
+.effort-selector__trigger-name {
+	white-space: nowrap;
+}
+
+.effort-selector__trigger-chevron {
+	width: 14px;
+	height: 14px;
+	color: var(--text-tertiary);
 }
 
 .model-selector__label {

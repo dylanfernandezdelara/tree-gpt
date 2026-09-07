@@ -1,4 +1,13 @@
-import { DEFAULT_MODEL, isModelId, type ModelId } from "../../worker/tree-types";
+import {
+	CHAT_MODELS,
+	DEFAULT_EFFORT,
+	DEFAULT_MODEL,
+	MODEL_EFFORTS,
+	isEffortId,
+	isModelId,
+	type EffortId,
+	type ModelId,
+} from "../../worker/tree-types";
 import type { Bookmark, Chat, ForkOrigin, Message } from "../types";
 import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
@@ -39,6 +48,8 @@ type UiState = {
 	sidebarTree: Record<string, SidebarTree>;
 	/** Width of the bookmarks list, in px. */
 	bookmarksWidth: number;
+	/** Reasoning effort per model. Unknown or unsupported values read as that model's default. */
+	effort: Record<ModelId, EffortId>;
 };
 
 function chatsKey(namespace: string): string {
@@ -104,6 +115,21 @@ function loadUi(): UiState {
 			};
 		}
 	}
+	const storedEffort =
+		typeof record.effort === "object" && record.effort !== null
+			? (record.effort as Record<string, unknown>)
+			: {};
+	const effort = Object.fromEntries(
+		CHAT_MODELS.map((model) => {
+			const stored = storedEffort[model.id];
+			return [
+				model.id,
+				isEffortId(stored) && MODEL_EFFORTS[model.id].includes(stored)
+					? stored
+					: DEFAULT_EFFORT[model.id],
+			];
+		}),
+	) as Record<ModelId, EffortId>;
 	return {
 		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : true,
 		activeChatId: active,
@@ -114,6 +140,7 @@ function loadUi(): UiState {
 			typeof record.bookmarksWidth === "number" && record.bookmarksWidth > 0
 				? record.bookmarksWidth
 				: DEFAULT_BOOKMARKS_WIDTH,
+		effort,
 	};
 }
 
@@ -231,6 +258,19 @@ export function loadSelectedModel(): ModelId {
 
 export function saveSelectedModel(model: ModelId): void {
 	writeJson(UI_KEY, { ...loadUi(), model });
+}
+
+export function loadModelEfforts(): Record<ModelId, EffortId> {
+	return loadUi().effort;
+}
+
+export function loadModelEffort(model: ModelId): EffortId {
+	return loadUi().effort[model];
+}
+
+export function saveModelEffort(model: ModelId, effort: EffortId): void {
+	const ui = loadUi();
+	writeJson(UI_KEY, { ...ui, effort: { ...ui.effort, [model]: effort } });
 }
 
 /**

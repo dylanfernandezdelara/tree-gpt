@@ -82,7 +82,7 @@ describe("sendChatStream", () => {
 			[{ role: "user", content: "hi" }],
 			new AbortController().signal,
 			() => {},
-			{ model: "openai/gpt-5.6-luna" },
+			{ model: "openai/gpt-5.6-luna", effort: "low" },
 		);
 
 		expect(result).toEqual({ ok: true, model: "openai/gpt-5.6-luna" });
@@ -91,10 +91,11 @@ describe("sendChatStream", () => {
 			unknown
 		>;
 		expect(sent.model).toBe("openai/gpt-5.6-luna");
+		expect(sent.effort).toBe("low");
 		expect(sent.stream).toBe(true);
 	});
 
-	it("omits the model field when no model is selected", async () => {
+	it("omits the model and effort fields when none are selected", async () => {
 		fetchMock.mockResolvedValue(
 			sseResponse(`data: {"type":"done","model":"meta/muse-spark-1.3-contributor"}\n\n`),
 		);
@@ -105,6 +106,7 @@ describe("sendChatStream", () => {
 			unknown
 		>;
 		expect("model" in sent).toBe(false);
+		expect("effort" in sent).toBe(false);
 	});
 
 	it("surfaces mid-stream errors", async () => {

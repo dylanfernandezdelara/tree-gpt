@@ -1,4 +1,4 @@
-import type { ModelId } from "../../worker/tree-types";
+import type { EffortId, ModelId } from "../../worker/tree-types";
 import type { Role } from "../types";
 
 export type ChatResponse =
@@ -25,7 +25,7 @@ export async function sendChatStream(
 	messages: ChatTurn[],
 	signal: AbortSignal,
 	onUpdate: (update: StreamUpdate) => void,
-	options?: { model?: ModelId },
+	options?: { model?: ModelId; effort?: EffortId },
 ): Promise<StreamResult> {
 	const last = messages[messages.length - 1];
 	const response = await fetch("/api/openrouter", {
@@ -36,6 +36,7 @@ export async function sendChatStream(
 			messages,
 			stream: true,
 			...(options?.model ? { model: options.model } : {}),
+			...(options?.effort ? { effort: options.effort } : {}),
 		}),
 		signal,
 	});

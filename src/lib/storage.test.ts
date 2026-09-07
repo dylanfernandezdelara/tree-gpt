@@ -4,9 +4,12 @@ import {
 	dropTransient,
 	isChat,
 	isMessage,
+	loadModelEffort,
+	loadModelEfforts,
 	loadSelectedModel,
 	loadSidebarOpen,
 	persistableFields,
+	saveModelEffort,
 	saveSelectedModel,
 	saveSidebarOpen,
 } from "./storage";
@@ -102,11 +105,7 @@ describe("model preference", () => {
 	});
 
 	it("round-trips each allowlisted model", () => {
-		for (const model of [
-			"meta/muse-spark-1.3-contributor",
-			"openai/gpt-5.6-luna",
-			"qwen/qwen3.7-flash",
-		] as const) {
+		for (const model of ["meta/muse-spark-1.3-contributor", "openai/gpt-5.6-luna"] as const) {
 			saveSelectedModel(model);
 			expect(loadSelectedModel()).toBe(model);
 		}
@@ -128,5 +127,55 @@ describe("model preference", () => {
 		saveSelectedModel("openai/gpt-5.6-luna");
 		expect(loadSidebarOpen()).toBe(false);
 		expect(loadSelectedModel()).toBe("openai/gpt-5.6-luna");
+	});
+});
+
+describe("effort preference", () => {
+	function memoryStorage(initial: Record<string, string> = {}) {
+		const store = new Map(Object.entries(initial));
+		return {
+			getItem: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+			setItem: (key: string, value: string) => {
+				store.set(key, value);
+			},
+			removeItem: (key: string) => {
+				store.delete(key);
+			},
+		};
+	}
+
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+		vi.stubGlobal("localStorage", memoryStorage());
+	});
+
+	it("defaults each model to its own effort", () => {
+		expect(loadModelEfforts()).toEqual({
+			"meta/muse-spark-1.3-contributor": "minimal",
+			"openai/gpt-5.6-luna": "none",
+		});
+	});
+
+	it("round-trips per-model efforts independently", () => {
+		saveModelEffort("meta/muse-spark-1.3-contributor", "high");
+		saveModelEffort("openai/gpt-5.6-luna", "low");
+		expect(loadModelEffort("meta/muse-spark-1.3-contributor")).toBe("high");
+		expect(loadModelEffort("openai/gpt-5.6-luna")).toBe("low");
+	});
+
+	it("falls back to the model default for unknown or unsupported values", () => {
+		vi.stubGlobal(
+			"localStorage",
+			memoryStorage({
+				"treegpt.ui.v1": JSON.stringify({
+					effort: {
+						"meta/muse-spark-1.3-contributor": "none",
+						"openai/gpt-5.6-luna": "ultra",
+					},
+				}),
+			}),
+		);
+		expect(loadModelEffort("meta/muse-spark-1.3-contributor")).toBe("minimal");
+		expect(loadModelEffort("openai/gpt-5.6-luna")).toBe("none");
 	});
 });
