@@ -43,7 +43,7 @@ Response: { "ok": true, "model": string, "message": string }
        or { "ok": false, "error": string, "details"?: string }
 ```
 
-When `messages` is present and valid, the Worker forwards that array to OpenRouter. Otherwise it sends `[{ role: "user", content: message }]`. History is capped (last 50 turns, 32k characters) before the upstream call.
+When `messages` is present and valid, the Worker forwards that array to OpenRouter. Otherwise it sends `[{ role: "user", content: message }]`. History is capped (last 50 turns, 32k characters) before the upstream call. Requires the Better Auth session cookie; answers `401` with no session. Rate-limited per user (60 generates/hour; `429` with `Retry-After` over the limit).
 
 ### Chats (per-user storage)
 
