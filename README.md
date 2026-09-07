@@ -43,7 +43,7 @@ Response: { "ok": true, "model": string, "message": string }
        or { "ok": false, "error": string, "details"?: string }
 ```
 
-Backend TODO: when `messages` is present and valid, forward it to OpenRouter instead of `[{ role: "user", content: message }]` so replies have conversation context.
+When `messages` is present and valid, the Worker forwards that array to OpenRouter. Otherwise it sends `[{ role: "user", content: message }]`. History is capped (last 50 turns, 32k characters) before the upstream call.
 
 ### Chats (per-user storage)
 
@@ -62,7 +62,7 @@ Message = { "id": string, "role": "user" | "assistant", "content": string, "crea
 
 Timestamps are milliseconds since the epoch. The frontend sends the whole chat on every change (debounced), so `PUT` is a full replace. Pagination can come later; for now `GET` returns everything.
 
-Until these routes exist, the frontend keeps a signed-in user's chats in the browser under a per-user key and logs a warning. Guest chats are not moved into an account on sign-in.
+Signed-in users persist chats here; the frontend falls back to a per-user localStorage key only if these routes fail. Guest chats stay in the browser and are not moved into an account on sign-in.
 
 ### Auth (Better Auth)
 
