@@ -24,7 +24,6 @@ import {
 } from "./lib/storage";
 import type { Chat, Message } from "./types";
 
-const DISCLAIMER = "treeGPT can make mistakes. Check important info.";
 const SYNC_DEBOUNCE_MS = 500;
 const NO_CHATS: Chat[] = [];
 
@@ -322,13 +321,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 					)}
 				</header>
 				{activeChat && activeChat.messages.length > 0 ? (
-					<>
-						<ChatThread chat={activeChat} onRedo={redo} />
-						<div className="composer-area">
-							<p className="disclaimer">{DISCLAIMER}</p>
-							{composer}
-						</div>
-					</>
+					<ChatThread chat={activeChat} onRedo={redo} composer={composer} />
 				) : (
 					<EmptyState>{composer}</EmptyState>
 				)}

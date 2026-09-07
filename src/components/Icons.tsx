@@ -179,3 +179,11 @@ export function PasskeyIcon(props: IconProps) {
 		</Svg>
 	);
 }
+
+export function ArrowDownIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} strokeWidth={1.5} d="M10 4v12M4.5 10.5 10 16l5.5-5.5" />
+		</Svg>
+	);
+}

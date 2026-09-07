@@ -284,8 +284,17 @@ button {
 	padding: 8px;
 }
 
-.thread {
+/* The scroll region; the composer floats over its bottom edge. */
+.thread-area {
+	position: relative;
 	flex: 1;
+	min-height: 0;
+	--composer-inset: 68px;
+}
+
+.thread {
+	position: absolute;
+	inset: 0;
 	padding: 0 64px;
 	overflow-y: auto;
 }
@@ -293,7 +302,67 @@ button {
 .thread__inner {
 	max-width: var(--thread-width);
 	margin: 0 auto;
-	padding: 12px 0 32px;
+	padding: 12px 0 calc(var(--composer-inset) + 24px);
+}
+
+/* Closes every chat; scrolls with the messages like any other content. */
+.thread__disclaimer {
+	margin: 24px 0 0;
+	font-size: 12px;
+	line-height: 16px;
+	color: var(--text-tertiary);
+	text-align: center;
+}
+
+/* Softens content passing beneath and beside the floating composer. */
+.thread-fade {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	height: var(--composer-inset);
+	background: linear-gradient(
+		to bottom,
+		rgba(255, 255, 255, 0),
+		rgba(255, 255, 255, 0.75) 16px,
+		rgba(255, 255, 255, 0.75)
+	);
+	pointer-events: none;
+}
+
+.composer-float {
+	position: absolute;
+	right: 0;
+	bottom: 16px;
+	left: 0;
+	padding: 0 64px;
+	pointer-events: none;
+}
+
+.composer-float > * {
+	pointer-events: auto;
+}
+
+.scroll-to-bottom {
+	position: absolute;
+	bottom: calc(var(--composer-inset) + 12px);
+	left: 50%;
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border: 1px solid var(--border-light);
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: var(--menu-shadow);
+	color: var(--text-primary);
+	transform: translateX(-50%);
+}
+
+.scroll-to-bottom:hover {
+	background: var(--surface-hover);
 }
 
 .turn {
@@ -523,20 +592,6 @@ button {
 
 /* ---------- Composer ---------- */
 
-.composer-area {
-	flex-shrink: 0;
-	padding: 0 64px 16px;
-}
-
-.disclaimer {
-	max-width: var(--thread-width);
-	margin: 0 auto 12px;
-	font-size: 12px;
-	line-height: 16px;
-	color: var(--text-tertiary);
-	text-align: center;
-}
-
 .composer {
 	display: flex;
 	align-items: flex-end;
@@ -624,7 +679,7 @@ button {
 
 @media (max-width: 768px) {
 	.thread,
-	.composer-area,
+	.composer-float,
 	.empty {
 		padding-left: 16px;
 		padding-right: 16px;
