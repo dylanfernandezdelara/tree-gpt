@@ -19,7 +19,7 @@ Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). In 
 
 All `/api/openrouter` and `/api/chats` routes require the Better Auth session cookie (`401` without one).
 
-- `POST /api/openrouter` — `{ message, messages: [{ role, content }] }` → `{ ok, model, message }` or `{ ok: false, error }` (legacy `reasoningDetails` blobs are accepted and dropped)
+- `POST /api/openrouter` — `{ message, messages: [{ role, content }], stream? }` → `{ ok, model, message }`, or with `stream: true` an SSE stream of `{ type: "reasoning" | "content", text }` / `{ type: "done", model }` / `{ type: "error", error }` events, or `{ ok: false, error }` (legacy `reasoningDetails` blobs are accepted and dropped; display-only `reasoning` text on messages is stored for rendering and never sent upstream)
 - `GET /api/chats` → `{ chats }`, `PUT /api/chats/:id` (full replace), `DELETE /api/chats/:id`
 
 Shapes mirror the types in `worker/openrouter.ts` (`CompletionMessage`) and `worker/chats.ts` (`ApiChat`/`ApiMessage`), which are the source of truth. Signed-in chats persist per user; guests keep chats in the browser.

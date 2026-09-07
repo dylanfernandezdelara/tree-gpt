@@ -30,7 +30,18 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 	if (message.pending) {
 		return (
 			<div className="turn turn--assistant" aria-busy="true" aria-live="polite">
-				<span className="thinking-dot" />
+				<div className="thinking">
+					<span className="thinking-dot" />
+					<span className="thinking__label">Thinking…</span>
+					{message.reasoning ? (
+						<p className="thinking__text">{message.reasoning}</p>
+					) : null}
+				</div>
+				{message.content ? (
+					<div className="markdown">
+						<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+					</div>
+				) : null}
 			</div>
 		);
 	}
@@ -50,6 +61,12 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 
 	return (
 		<div className="turn turn--assistant">
+			{message.reasoning ? (
+				<details className="thinking">
+					<summary className="thinking__label">Thought</summary>
+					<p className="thinking__text">{message.reasoning}</p>
+				</details>
+			) : null}
 			<div className="markdown">
 				<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
 			</div>

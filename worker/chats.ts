@@ -5,6 +5,8 @@ const MAX_TITLE = 200;
 const MAX_CHATS = 100;
 const MAX_MESSAGES = 80;
 const MAX_CONTENT = 8_000;
+/** Display-only thinking trace; small by construction, never sent upstream. */
+const MAX_REASONING = 4_000;
 
 type Role = "user" | "assistant";
 
@@ -13,6 +15,7 @@ type ApiMessage = {
 	role: Role;
 	content: string;
 	createdAt: number;
+	reasoning?: string;
 };
 
 type ApiChat = {
@@ -36,6 +39,7 @@ type MessageRow = {
 	role: string;
 	content: string;
 	created_at: number;
+	reasoning: string | null;
 };
 
 export async function handleChatsRequest(
@@ -92,7 +96,7 @@ async function loadCallerChats(db: D1Database, userId: string): Promise<Response
 
 	const messageResult = await db
 		.prepare(
-			`SELECT m.id, m.chat_id, m.role, m.content, m.created_at
+			`SELECT m.id, m.chat_id, m.role, m.content, m.created_at, m.reasoning
 			 FROM messages m
 			 INNER JOIN chats c ON c.id = m.chat_id
 			 WHERE c.user_id = ?
@@ -112,6 +116,7 @@ async function loadCallerChats(db: D1Database, userId: string): Promise<Response
 			role: row.role,
 			content: row.content,
 			createdAt: row.created_at,
+			...(row.role === "assistant" && row.reasoning ? { reasoning: row.reasoning } : {}),
 		});
 		byChat.set(row.chat_id, list);
 	}
@@ -188,9 +193,16 @@ async function replaceChat(
 	for (const message of chat.messages) {
 		statements.push(
 			env.DB.prepare(
-				`INSERT INTO messages (id, chat_id, role, content, created_at)
-				 VALUES (?, ?, ?, ?, ?)`,
-			).bind(message.id, chat.id, message.role, message.content, message.createdAt),
+				`INSERT INTO messages (id, chat_id, role, content, created_at, reasoning)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+			).bind(
+				message.id,
+				chat.id,
+				message.role,
+				message.content,
+				message.createdAt,
+				message.role === "assistant" && message.reasoning ? message.reasoning : null,
+			),
 		);
 	}
 
@@ -324,8 +336,14 @@ function parseMessage(
 		return { ok: false, error: "message content is too long" };
 	}
 
-	// Legacy clients may still send reasoningDetails blobs. They are accepted
-	// and dropped: nothing upstream or in storage uses them anymore.
+	// Display-only thinking trace: kept for rendering, never sent upstream.
+	// Liberal parsing (drop wrong types, truncate long traces) so a display
+	// garnish can never reject an otherwise valid chat. Legacy
+	// reasoningDetails blobs are accepted and dropped.
+	const reasoning =
+		item.role === "assistant" && "reasoning" in item && typeof item.reasoning === "string"
+			? item.reasoning.slice(0, MAX_REASONING)
+			: undefined;
 	return {
 		ok: true,
 		value: {
@@ -333,6 +351,7 @@ function parseMessage(
 			role: item.role,
 			content,
 			createdAt: item.createdAt,
+			...(reasoning ? { reasoning } : {}),
 		},
 	};
 }

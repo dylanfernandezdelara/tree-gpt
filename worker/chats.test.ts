@@ -44,7 +44,7 @@ describe("handleChatsRequest", () => {
 		vi.clearAllMocks();
 	});
 
-	it("PUT accepts legacy reasoningDetails but never writes the column", async () => {
+	it("PUT drops legacy blobs but stores the display-only trace", async () => {
 		const { db, statements } = makeDb({
 			first: async (sql) => (sql.includes("COUNT(*)") ? { n: 0 } : undefined),
 		});
@@ -60,6 +60,7 @@ describe("handleChatsRequest", () => {
 						content: "hello",
 						createdAt: 2,
 						reasoningDetails: [{ type: "reasoning.text", text: "old thinking" }],
+						reasoning: "Considering the question.",
 					},
 				]),
 			),
@@ -70,16 +71,51 @@ describe("handleChatsRequest", () => {
 		const body = (await response.json()) as {
 			chat: { messages: Record<string, unknown>[] };
 		};
-		for (const message of body.chat.messages) {
-			expect("reasoningDetails" in message).toBe(false);
-		}
+		expect(body.chat.messages[1]).toEqual({
+			id: "m2",
+			role: "assistant",
+			content: "hello",
+			createdAt: 2,
+			reasoning: "Considering the question.",
+		});
 		expect(statements.length).toBeGreaterThan(0);
 		for (const statement of statements) {
 			expect(statement.sql.includes("reasoning_details")).toBe(false);
 		}
-		const insert = statements.find((s) => s.sql.startsWith("INSERT INTO messages"));
-		expect(insert).toBeDefined();
-		expect(insert?.params).toHaveLength(5);
+		const inserts = statements.filter((s) => s.sql.startsWith("INSERT INTO messages"));
+		expect(inserts).toHaveLength(2);
+		// The user turn stores no trace; the assistant turn stores it.
+		expect(inserts[0]?.params[5]).toBe(null);
+		expect(inserts[1]?.params).toHaveLength(6);
+		expect(inserts[1]?.params[5]).toBe("Considering the question.");
+	});
+
+	it("PUT truncates overlong traces instead of rejecting the chat", async () => {
+		const { db } = makeDb({
+			first: async (sql) => (sql.includes("COUNT(*)") ? { n: 0 } : undefined),
+		});
+		const request = new Request("http://localhost:5173/api/chats/chat-1", {
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(
+				chatBody([
+					{
+						id: "m1",
+						role: "assistant",
+						content: "hello",
+						createdAt: 1,
+						reasoning: "y".repeat(10_000),
+					},
+				]),
+			),
+		});
+
+		const response = await handleChatsRequest(request, envWith(db));
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			chat: { messages: { reasoning?: string }[] };
+		};
+		expect(body.chat.messages[0]?.reasoning).toHaveLength(4000);
 	});
 
 	it("GET returns messages without reasoningDetails", async () => {
@@ -99,6 +135,7 @@ describe("handleChatsRequest", () => {
 							role: "assistant",
 							content: "hello",
 							created_at: 2,
+							reasoning: "Considering the question.",
 						},
 					],
 				};
@@ -114,8 +151,12 @@ describe("handleChatsRequest", () => {
 			chats: { messages: Record<string, unknown>[] }[];
 		};
 		expect(body.chats).toHaveLength(1);
-		for (const message of body.chats[0]?.messages ?? []) {
-			expect("reasoningDetails" in message).toBe(false);
-		}
+		expect(body.chats[0]?.messages[1]).toEqual({
+			id: "m2",
+			role: "assistant",
+			content: "hello",
+			createdAt: 2,
+			reasoning: "Considering the question.",
+		});
 	});
 });

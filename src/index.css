@@ -553,14 +553,47 @@ button {
 	color: var(--text-primary);
 }
 
+.thinking {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+	color: var(--text-secondary);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+details.thinking {
+	display: block;
+}
+
 .thinking-dot {
 	display: block;
 	width: 12px;
 	height: 12px;
-	margin: 6px 0;
 	border-radius: 50%;
 	background: var(--text-primary);
 	animation: thinking 1.2s ease-in-out infinite;
+}
+
+details .thinking-dot {
+	display: none;
+}
+
+.thinking__label {
+	font-weight: 600;
+}
+
+details > .thinking__label {
+	cursor: pointer;
+}
+
+.thinking__text {
+	flex-basis: 100%;
+	margin: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 @keyframes thinking {

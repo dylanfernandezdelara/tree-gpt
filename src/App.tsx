@@ -6,7 +6,7 @@ import { ComposeIcon, SidebarIcon } from "./components/Icons";
 import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
-import { sendChat, type ChatTurn } from "./lib/api";
+import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
 import {
@@ -234,14 +234,39 @@ function ChatApp({ user }: { user: AuthUser }) {
 		const controller = new AbortController();
 		pendingRef.current.set(chatId, controller);
 		setPendingIds((prev) => new Set(prev).add(chatId));
-		try {
-			const result = await sendChat(history, controller.signal);
-			if (result.ok) {
-				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
-				setReply(chatId, replyId, { content: result.message, pending: false, error: false });
+		let reasoning = "";
+		let content = "";
+		const applyUpdate = (update: StreamUpdate) => {
+			if (update.type === "reasoning") {
+				reasoning += update.text;
 			} else {
-				const content = result.details ? `${result.error}: ${result.details}` : result.error;
-				setReply(chatId, replyId, { content, pending: false, error: true });
+				content += update.text;
+			}
+			const snapshot = { content, reasoning };
+			setReply(chatId, replyId, {
+				content: snapshot.content,
+				...(snapshot.reasoning ? { reasoning: snapshot.reasoning } : {}),
+			});
+		};
+		try {
+			const result = await sendChatStream(history, controller.signal, applyUpdate);
+			if (result.ok && content.trim()) {
+				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
+				setReply(chatId, replyId, {
+					content,
+					pending: false,
+					error: false,
+					...(reasoning ? { reasoning } : {}),
+				});
+			} else if (result.ok) {
+				setReply(chatId, replyId, {
+					content: "OpenRouter returned an empty reply.",
+					pending: false,
+					error: true,
+				});
+			} else {
+				const text = result.details ? `${result.error}: ${result.details}` : result.error;
+				setReply(chatId, replyId, { content: text, pending: false, error: true });
 			}
 		} catch {
 			if (controller.signal.aborted) {
@@ -348,7 +373,12 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (history.length === 0) {
 			return;
 		}
-		setReply(chat.id, messageId, { content: "", pending: true, error: false });
+		setReply(chat.id, messageId, {
+			content: "",
+			pending: true,
+			error: false,
+			reasoning: undefined,
+		});
 		void request(chat.id, messageId, history);
 	}
 

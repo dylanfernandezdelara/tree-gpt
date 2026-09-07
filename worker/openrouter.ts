@@ -71,6 +71,12 @@ export async function handleOpenRouterRequest(
 		);
 	}
 
+	if (parsed.stream) {
+		return requestStreamCompletion(env, parsed.messages, {
+			origin: new URL(request.url).origin,
+		});
+	}
+
 	const completion = await requestCompletion(env, parsed.messages, {
 		origin: new URL(request.url).origin,
 	});
@@ -228,9 +234,217 @@ export async function requestCompletion(
 	return { ok: true, value: parsed.completion };
 }
 
+/** Client-facing stream event: text deltas, then done (or error). */
+export type StreamEvent =
+	| { type: "reasoning"; text: string }
+	| { type: "content"; text: string }
+	| { type: "done"; model: string }
+	| { type: "error"; error: string };
+
+/** Safety cap: the trace is display-only, never echoed, so bound it. */
+const MAX_STREAM_REASONING_CHARS = 8_000;
+
+export async function requestStreamCompletion(
+	env: Env,
+	messages: readonly CompletionMessage[],
+	options?: { sessionId?: string; origin?: string },
+): Promise<Response> {
+	if (!env.OPENROUTER_API_KEY) {
+		return Response.json(
+			{ ok: false, error: "OPENROUTER_API_KEY is not set in .dev.vars" },
+			{ status: 500 },
+		);
+	}
+
+	// Streaming wants the trace (no `exclude`) so the UI can show thinking
+	// live. History still carries role/content only, so the input side of
+	// the latency fix is unchanged.
+	const upstream = await fetch(OPENROUTER_CHAT_URL, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+			"Content-Type": "application/json",
+			"HTTP-Referer": options?.origin ?? "http://localhost:5173",
+			"X-Title": "treeGPT",
+		},
+		body: JSON.stringify({
+			model: CHAT_MODEL,
+			messages: toOpenRouterMessages(messages),
+			max_tokens: 4096,
+			reasoning: { effort: "minimal" },
+			stream: true,
+			...(options?.sessionId ? { session_id: options.sessionId } : {}),
+		}),
+	});
+
+	if (!upstream.ok || !upstream.body) {
+		const details = (await upstream.text()).slice(0, 500);
+		return Response.json(
+			{ ok: false, error: `OpenRouter returned ${upstream.status}`, details },
+			{ status: 502 },
+		);
+	}
+
+	const stream = translateStream(upstream.body);
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+		},
+	});
+}
+
+/**
+ * Re-emits OpenRouter SSE as our minimal StreamEvent protocol. Upstream
+ * `reasoning_details` deltas become display-only `reasoning` text: they are
+ * never stored server-side and never echoed on later turns.
+ */
+function translateStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+	const encoder = new TextEncoder();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let model = CHAT_MODEL;
+	let reasoningSent = 0;
+	let closed = false;
+
+	function emit(controller: ReadableStreamDefaultController<Uint8Array>, event: StreamEvent) {
+		if (!closed) {
+			controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+		}
+	}
+
+	function handleFrame(
+		controller: ReadableStreamDefaultController<Uint8Array>,
+		frame: string,
+	) {
+		for (const line of frame.split("\n")) {
+			const data = line.startsWith("data:") ? line.slice(5).trim() : "";
+			if (!data || data === "[DONE]") {
+				continue;
+			}
+			let payload: unknown;
+			try {
+				payload = JSON.parse(data);
+			} catch {
+				continue;
+			}
+			if (typeof payload !== "object" || payload === null) {
+				continue;
+			}
+			if ("model" in payload && typeof payload.model === "string") {
+				model = payload.model;
+			}
+			if ("error" in payload) {
+				emit(controller, { type: "error", error: "OpenRouter returned an error" });
+				closed = true;
+				return;
+			}
+			const delta = readDelta(payload);
+			if (!delta) {
+				continue;
+			}
+			if (delta.reasoning && reasoningSent < MAX_STREAM_REASONING_CHARS) {
+				const room = MAX_STREAM_REASONING_CHARS - reasoningSent;
+				const text = delta.reasoning.slice(0, room);
+				reasoningSent += text.length;
+				if (text) {
+					emit(controller, { type: "reasoning", text });
+				}
+			}
+			if (delta.content) {
+				emit(controller, { type: "content", text: delta.content });
+			}
+		}
+	}
+
+	const reader = upstream.getReader();
+	return new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			if (closed) {
+				controller.close();
+				return;
+			}
+			try {
+				const { done, value } = await reader.read();
+				if (done) {
+					const tail = buffer;
+					buffer = "";
+					if (tail.trim()) {
+						handleFrame(controller, tail);
+					}
+					if (!closed) {
+						emit(controller, { type: "done", model });
+					}
+					controller.close();
+					return;
+				}
+				buffer += decoder.decode(value, { stream: true });
+				const frames = buffer.split("\n\n");
+				buffer = frames.pop() ?? "";
+				for (const frame of frames) {
+					handleFrame(controller, frame);
+					if (closed) {
+						break;
+					}
+				}
+				if (closed) {
+					controller.close();
+				}
+			} catch {
+				if (!closed) {
+					emit(controller, { type: "error", error: "Stream interrupted" });
+				}
+				controller.close();
+			}
+		},
+		async cancel() {
+			closed = true;
+			try {
+				await reader.cancel();
+			} catch {
+				// Reader already settled; nothing to unwind.
+			}
+		},
+	});
+}
+
+function readDelta(payload: object): { content?: string; reasoning?: string } | null {
+	if (!("choices" in payload) || !Array.isArray(payload.choices)) {
+		return null;
+	}
+	const first = payload.choices[0];
+	if (typeof first !== "object" || first === null || !("delta" in first)) {
+		return null;
+	}
+	const delta = first.delta;
+	if (typeof delta !== "object" || delta === null) {
+		return null;
+	}
+	const out: { content?: string; reasoning?: string } = {};
+	if ("content" in delta && typeof delta.content === "string" && delta.content) {
+		out.content = delta.content;
+	}
+	const texts: string[] = [];
+	if ("reasoning" in delta && typeof delta.reasoning === "string" && delta.reasoning) {
+		texts.push(delta.reasoning);
+	}
+	if ("reasoning_details" in delta && Array.isArray(delta.reasoning_details)) {
+		for (const item of delta.reasoning_details) {
+			if (typeof item === "object" && item !== null && "text" in item && typeof item.text === "string") {
+				texts.push(item.text);
+			}
+		}
+	}
+	if (texts.length > 0) {
+		out.reasoning = texts.join("");
+	}
+	return out.content || out.reasoning ? out : null;
+}
+
 function parseCompletionRequest(
 	body: unknown,
-): { ok: true; messages: CompletionMessage[] } | { ok: false; error: string } {
+): { ok: true; messages: CompletionMessage[]; stream: boolean } | { ok: false; error: string } {
 	if (typeof body !== "object" || body === null) {
 		return { ok: false, error: "Invalid JSON body" };
 	}
@@ -247,8 +461,10 @@ function parseCompletionRequest(
 		return { ok: false, error: "message is too long" };
 	}
 
+	const stream = "stream" in body && body.stream === true;
+
 	if (!("messages" in body) || body.messages === undefined) {
-		return { ok: true, messages: [{ role: "user", content: message }] };
+		return { ok: true, messages: [{ role: "user", content: message }], stream };
 	}
 
 	const history = parseMessages(body.messages);
@@ -257,10 +473,10 @@ function parseCompletionRequest(
 	}
 
 	if (history.messages.length === 0) {
-		return { ok: true, messages: [{ role: "user", content: message }] };
+		return { ok: true, messages: [{ role: "user", content: message }], stream };
 	}
 
-	return { ok: true, messages: history.messages };
+	return { ok: true, messages: history.messages, stream };
 }
 
 function parseMessages(

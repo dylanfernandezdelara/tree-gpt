@@ -6,50 +6,129 @@ export type ChatResponse =
 
 export type ChatTurn = { role: Role; content: string };
 
+export type StreamUpdate = { type: "reasoning" | "content"; text: string };
+
+export type StreamResult =
+	| { ok: true; model: string }
+	| { ok: false; error: string; details?: string };
+
 /**
- * POST /api/openrouter
- *
- * Sends the whole conversation as `messages` (oldest first, ending with the
- * new user turn) plus `message`, a copy of that last user turn, which is the
- * field the current Worker reads. See "API contract" in README.md.
- *
- * Throws on network failure or abort; returns `{ ok: false }` for server errors.
+ * POST /api/openrouter with `stream: true`. Sends the whole conversation as
+ * `messages` (oldest first, ending with the new user turn) plus `message`, a
+ * copy of that last user turn, which is the field the current Worker reads.
+ * See "API contract" in README.md. Resolves when the worker closes the
+ * stream; text arrives incrementally through onUpdate. Throws on network
+ * failure or abort (the caller decides what to keep).
  */
-export async function sendChat(
+export async function sendChatStream(
 	messages: ChatTurn[],
 	signal: AbortSignal,
-): Promise<ChatResponse> {
+	onUpdate: (update: StreamUpdate) => void,
+): Promise<StreamResult> {
 	const last = messages[messages.length - 1];
 	const response = await fetch("/api/openrouter", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ message: last?.content ?? "", messages }),
+		body: JSON.stringify({ message: last?.content ?? "", messages, stream: true }),
 		signal,
 	});
 
-	let body: unknown = null;
-	try {
-		body = await response.json();
-	} catch {
-		// Some failures (proxies, gateways) answer without a JSON body.
-	}
-	const parsed = body === null ? null : parseChatResponse(body);
-	if (parsed?.ok) {
-		return parsed;
+	const contentType = response.headers.get("Content-Type") ?? "";
+	if (!response.ok || !contentType.includes("text/event-stream") || !response.body) {
+		let body: unknown = null;
+		try {
+			body = await response.json();
+		} catch {
+			// Some failures (proxies, gateways) answer without a JSON body.
+		}
+		const parsed = body === null ? null : parseChatResponse(body);
+		if (parsed && !parsed.ok) {
+			return parsed;
+		}
+		if (response.status === 401) {
+			return { ok: false, error: "Your session expired. Reload the page to sign in again." };
+		}
+		if (response.status === 429) {
+			return { ok: false, error: rateLimitMessage(response.headers.get("Retry-After")) };
+		}
+		if (parsed) {
+			return { ok: false, error: "Unexpected response from /api/openrouter" };
+		}
+		return { ok: false, error: `The server returned ${response.status}.` };
 	}
 
-	// Known statuses get a message that says what to do next; anything else
-	// falls back to whatever the Worker reported.
-	if (response.status === 401) {
-		return { ok: false, error: "Your session expired. Reload the page to sign in again." };
+	return consumeStream(response.body, onUpdate);
+}
+
+async function consumeStream(
+	body: ReadableStream<Uint8Array>,
+	onUpdate: (update: StreamUpdate) => void,
+): Promise<StreamResult> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let model = "";
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) {
+			break;
+		}
+		buffer += decoder.decode(value, { stream: true });
+		const frames = buffer.split("\n\n");
+		buffer = frames.pop() ?? "";
+		for (const frame of frames) {
+			const result = handleStreamFrame(frame, onUpdate);
+			if (result) {
+				if (result.type === "done") {
+					model = result.model;
+				} else {
+					await reader.cancel();
+					return { ok: false, error: result.error };
+				}
+			}
+		}
 	}
-	if (response.status === 429) {
-		return { ok: false, error: rateLimitMessage(response.headers.get("Retry-After")) };
+	if (model) {
+		return { ok: true, model };
 	}
-	if (parsed) {
-		return parsed;
+	return { ok: false, error: "The stream ended without a reply." };
+}
+
+function handleStreamFrame(
+	frame: string,
+	onUpdate: (update: StreamUpdate) => void,
+): { type: "done"; model: string } | { type: "error"; error: string } | null {
+	for (const line of frame.split("\n")) {
+		if (!line.startsWith("data:")) {
+			continue;
+		}
+		const data = line.slice(5).trim();
+		if (!data) {
+			continue;
+		}
+		let event: unknown;
+		try {
+			event = JSON.parse(data);
+		} catch {
+			continue;
+		}
+		if (typeof event !== "object" || event === null || !("type" in event)) {
+			continue;
+		}
+		if (event.type === "reasoning" || event.type === "content") {
+			if ("text" in event && typeof event.text === "string" && event.text) {
+				onUpdate({ type: event.type, text: event.text });
+			}
+			continue;
+		}
+		if (event.type === "done" && "model" in event && typeof event.model === "string") {
+			return { type: "done", model: event.model };
+		}
+		if (event.type === "error" && "error" in event && typeof event.error === "string") {
+			return { type: "error", error: event.error };
+		}
 	}
-	return { ok: false, error: `The server returned ${response.status}.` };
+	return null;
 }
 
 /** The Worker caps generations per hour and sends Retry-After in seconds. */

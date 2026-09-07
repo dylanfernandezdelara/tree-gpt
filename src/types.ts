@@ -5,6 +5,11 @@ export type Message = {
 	role: Role;
 	content: string;
 	createdAt: number;
+	/**
+	 * Display-only thinking trace, streamed live and never sent upstream.
+	 * Assistant-only; absent on older messages.
+	 */
+	reasoning?: string;
 	/** Assistant reply that has not arrived yet. */
 	pending?: boolean;
 	/** The request for this reply failed; `content` holds the error text. */

@@ -150,12 +150,15 @@ export function isMessage(value: unknown): value is Message {
 
 export function persistableFields(message: Message): Pick<
 	Message,
-	"role" | "content" | "createdAt"
+	"role" | "content" | "createdAt" | "reasoning"
 > {
+	const reasoning =
+		message.role === "assistant" && message.reasoning ? message.reasoning : undefined;
 	return {
 		role: message.role,
 		content: message.content,
 		createdAt: message.createdAt,
+		...(reasoning ? { reasoning } : {}),
 	};
 }
 

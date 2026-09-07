@@ -149,6 +149,98 @@ describe("handleOpenRouterRequest", () => {
 		vi.stubGlobal("fetch", fetchMock);
 	});
 
+	it("streams reasoning and content as display-only events", async () => {
+		const frames = [
+			`data: {"model":"meta/muse-spark-1.3-contributor","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Considering","index":0}]}}]}\n\n`,
+			`data: {"model":"meta/muse-spark-1.3-contributor","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":" the question","index":0}]}}]}\n\n`,
+			`data: {"model":"meta/muse-spark-1.3-contributor","choices":[{"delta":{"content":"Hello"}}]}\n\n`,
+			`data: {"model":"meta/muse-spark-1.3-contributor","choices":[{"delta":{"content":" there"}}]}\n\n`,
+			`data: [DONE]\n\n`,
+		];
+		fetchMock.mockResolvedValue(
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						// Split the first frame mid-bytes to prove framing survives
+						// chunk boundaries.
+						const bytes = new TextEncoder().encode(frames.join(""));
+						controller.enqueue(bytes.slice(0, 37));
+						controller.enqueue(bytes.slice(37));
+						controller.close();
+					},
+				}),
+				{ status: 200 },
+			),
+		);
+		const request = new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				message: "hi",
+				messages: [
+					{
+						role: "assistant",
+						content: "old",
+						reasoning: "display-only trace, must not go upstream",
+					},
+					{ role: "user", content: "hi" },
+				],
+				stream: true,
+			}),
+		});
+
+		const response = await handleOpenRouterRequest(request, env());
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+
+		const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(upstream.stream).toBe(true);
+		// The trace is wanted back for display, so no `exclude` — but the
+		// display-only field from history must never be forwarded.
+		expect(upstream.reasoning).toEqual({ effort: "minimal" });
+		expect(JSON.stringify(upstream.messages).includes("reasoning")).toBe(false);
+
+		const events = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
+		expect(events).toEqual([
+			{ type: "reasoning", text: "Considering" },
+			{ type: "reasoning", text: " the question" },
+			{ type: "content", text: "Hello" },
+			{ type: "content", text: " there" },
+			{ type: "done", model: "meta/muse-spark-1.3-contributor" },
+		]);
+	});
+
+	it("turns mid-stream upstream errors into an error event", async () => {
+		fetchMock.mockResolvedValue(
+			new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(
+							new TextEncoder().encode(`data: {"error":{"message":"overloaded"}}\n\n`),
+						);
+						controller.close();
+					},
+				}),
+				{ status: 200 },
+			),
+		);
+		const request = new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ message: "hi", stream: true }),
+		});
+
+		const response = await handleOpenRouterRequest(request, env());
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('"type":"error"');
+	});
+
 	it("accepts (and drops) legacy reasoningDetails instead of rejecting them", async () => {
 		fetchMock.mockResolvedValue(upstreamOk(chatPayload("fresh reply")));
 		const request = new Request("http://localhost:5173/api/openrouter", {
