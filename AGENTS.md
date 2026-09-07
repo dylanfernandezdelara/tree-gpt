@@ -19,6 +19,12 @@ npm run dev
 
 Use `localhost`, not `127.0.0.1`.
 
+## Agent worktrees
+
+- In-session subagents: use built-in worktree isolation; never run `git worktree` manually.
+- Separate sessions: `git worktree add ../treeGPT-<slug> -b agent/<slug> main`, push and open a PR. Never merge locally into `main`.
+- Cleanup only after the PR merges and prod deploy is green: `git worktree remove ../treeGPT-<slug>`, `git branch -d agent/<slug>`, `git worktree prune`.
+
 ## Models
 
 Default model for all OpenRouter chat completions: `meta/muse-spark-1.3-contributor` (Muse Spark 1.3 contributor tier).
