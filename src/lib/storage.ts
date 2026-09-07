@@ -1,4 +1,4 @@
-import type { Chat, Message, ReasoningDetails } from "../types";
+import type { Chat, Message } from "../types";
 import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
 /**
@@ -138,45 +138,24 @@ export function isMessage(value: unknown): value is Message {
 		return false;
 	}
 	const m = value as Record<string, unknown>;
-	if (
-		typeof m.id !== "string" ||
-		(m.role !== "user" && m.role !== "assistant") ||
-		typeof m.content !== "string" ||
-		typeof m.createdAt !== "number"
-	) {
-		return false;
-	}
-	if (m.reasoningDetails === undefined) {
-		return true;
-	}
-	return m.role === "assistant" && asReasoningDetails(m.reasoningDetails) !== undefined;
-}
-
-export function asReasoningDetails(value: unknown): ReasoningDetails | undefined {
-	if (!Array.isArray(value) || value.length === 0) {
-		return undefined;
-	}
-	const details: Record<string, unknown>[] = [];
-	for (const item of value) {
-		if (typeof item !== "object" || item === null || Array.isArray(item)) {
-			return undefined;
-		}
-		details.push({ ...item });
-	}
-	return details;
+	// Legacy stored messages may carry a reasoningDetails blob; it is ignored
+	// (and stripped by dropTransient) rather than rejected.
+	return (
+		typeof m.id === "string" &&
+		(m.role === "user" || m.role === "assistant") &&
+		typeof m.content === "string" &&
+		typeof m.createdAt === "number"
+	);
 }
 
 export function persistableFields(message: Message): Pick<
 	Message,
-	"role" | "content" | "createdAt" | "reasoningDetails"
+	"role" | "content" | "createdAt"
 > {
-	const reasoningDetails =
-		message.role === "assistant" ? asReasoningDetails(message.reasoningDetails) : undefined;
 	return {
 		role: message.role,
 		content: message.content,
 		createdAt: message.createdAt,
-		...(reasoningDetails ? { reasoningDetails } : {}),
 	};
 }
 

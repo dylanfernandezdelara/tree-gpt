@@ -1,17 +1,10 @@
 import { ensureDomainUser, getSessionUser } from "./auth.js";
-import {
-	optionalReasoning,
-	parseReasoningDetails,
-	parseStoredReasoning,
-	type ReasoningDetails,
-} from "./reasoning.js";
 
 const MAX_ID = 128;
 const MAX_TITLE = 200;
 const MAX_CHATS = 100;
 const MAX_MESSAGES = 80;
 const MAX_CONTENT = 8_000;
-const MAX_STORED_REASONING_TURNS = 8;
 
 type Role = "user" | "assistant";
 
@@ -20,7 +13,6 @@ type ApiMessage = {
 	role: Role;
 	content: string;
 	createdAt: number;
-	reasoningDetails?: ReasoningDetails;
 };
 
 type ApiChat = {
@@ -44,7 +36,6 @@ type MessageRow = {
 	role: string;
 	content: string;
 	created_at: number;
-	reasoning_details: string | null;
 };
 
 export async function handleChatsRequest(
@@ -101,7 +92,7 @@ async function loadCallerChats(db: D1Database, userId: string): Promise<Response
 
 	const messageResult = await db
 		.prepare(
-			`SELECT m.id, m.chat_id, m.role, m.content, m.created_at, m.reasoning_details
+			`SELECT m.id, m.chat_id, m.role, m.content, m.created_at
 			 FROM messages m
 			 INNER JOIN chats c ON c.id = m.chat_id
 			 WHERE c.user_id = ?
@@ -116,16 +107,11 @@ async function loadCallerChats(db: D1Database, userId: string): Promise<Response
 			continue;
 		}
 		const list = byChat.get(row.chat_id) ?? [];
-		const reasoningDetails =
-			row.role === "assistant" && row.reasoning_details
-				? parseStoredReasoning(row.reasoning_details)
-				: undefined;
 		list.push({
 			id: row.id,
 			role: row.role,
 			content: row.content,
 			createdAt: row.created_at,
-			...optionalReasoning(row.role, reasoningDetails),
 		});
 		byChat.set(row.chat_id, list);
 	}
@@ -135,7 +121,7 @@ async function loadCallerChats(db: D1Database, userId: string): Promise<Response
 		title: row.title,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
-		messages: keepRecentReasoning(byChat.get(row.id) ?? []),
+		messages: byChat.get(row.id) ?? [],
 	}));
 
 	return Response.json({ chats });
@@ -184,10 +170,7 @@ async function replaceChat(
 
 	await ensureDomainUser(env.DB, user);
 
-	const chat = {
-		...parsed.chat,
-		messages: keepRecentReasoning(parsed.chat.messages),
-	};
+	const chat = parsed.chat;
 	const statements: D1PreparedStatement[] = [
 		existing
 			? env.DB.prepare(
@@ -205,16 +188,9 @@ async function replaceChat(
 	for (const message of chat.messages) {
 		statements.push(
 			env.DB.prepare(
-				`INSERT INTO messages (id, chat_id, role, content, created_at, reasoning_details)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
-			).bind(
-				message.id,
-				chat.id,
-				message.role,
-				message.content,
-				message.createdAt,
-				message.reasoningDetails ? JSON.stringify(message.reasoningDetails) : null,
-			),
+				`INSERT INTO messages (id, chat_id, role, content, created_at)
+				 VALUES (?, ?, ?, ?, ?)`,
+			).bind(message.id, chat.id, message.role, message.content, message.createdAt),
 		);
 	}
 
@@ -348,16 +324,8 @@ function parseMessage(
 		return { ok: false, error: "message content is too long" };
 	}
 
-	const reasoning = parseReasoningDetails(
-		"reasoningDetails" in item ? item.reasoningDetails : undefined,
-	);
-	if (!reasoning.ok) {
-		return reasoning;
-	}
-	if (item.role !== "assistant" && reasoning.value) {
-		return { ok: false, error: "reasoningDetails is only valid on assistant messages" };
-	}
-
+	// Legacy clients may still send reasoningDetails blobs. They are accepted
+	// and dropped: nothing upstream or in storage uses them anymore.
 	return {
 		ok: true,
 		value: {
@@ -365,32 +333,8 @@ function parseMessage(
 			role: item.role,
 			content,
 			createdAt: item.createdAt,
-			...optionalReasoning(item.role, reasoning.value),
 		},
 	};
-}
-
-function keepRecentReasoning(messages: ApiMessage[]): ApiMessage[] {
-	let remaining = MAX_STORED_REASONING_TURNS;
-	const kept: ApiMessage[] = [];
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (!message) {
-			continue;
-		}
-		if (message.role === "assistant" && message.reasoningDetails && remaining > 0) {
-			remaining -= 1;
-			kept.push(message);
-			continue;
-		}
-		kept.push({
-			id: message.id,
-			role: message.role,
-			content: message.content,
-			createdAt: message.createdAt,
-		});
-	}
-	return kept.reverse();
 }
 
 function isId(value: unknown): value is string {

@@ -238,12 +238,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 			const result = await sendChat(history, controller.signal);
 			if (result.ok) {
 				updateChat(chatId, (chat) => ({ ...chat, updatedAt: Date.now() }));
-				setReply(chatId, replyId, {
-					content: result.message,
-					pending: false,
-					error: false,
-					reasoningDetails: result.reasoningDetails,
-				});
+				setReply(chatId, replyId, { content: result.message, pending: false, error: false });
 			} else {
 				const content = result.details ? `${result.error}: ${result.details}` : result.error;
 				setReply(chatId, replyId, { content, pending: false, error: true });
@@ -353,12 +348,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		if (history.length === 0) {
 			return;
 		}
-		setReply(chat.id, messageId, {
-			content: "",
-			pending: true,
-			error: false,
-			reasoningDetails: undefined,
-		});
+		setReply(chat.id, messageId, { content: "", pending: true, error: false });
 		void request(chat.id, messageId, history);
 	}
 
@@ -490,14 +480,9 @@ function copyMessages(messages: Message[]): Message[] {
 
 /** Conversation turns to send upstream: finished messages only. */
 function toTurns(messages: Message[]): ChatTurn[] {
-	return messages.filter((m) => !m.pending && !m.error).map((m) => {
-		const persisted = persistableFields(m);
-		return {
-			role: persisted.role,
-			content: persisted.content,
-			...(persisted.reasoningDetails ? { reasoningDetails: persisted.reasoningDetails } : {}),
-		};
-	});
+	return messages
+		.filter((m) => !m.pending && !m.error)
+		.map((m) => ({ role: m.role, content: m.content }));
 }
 
 /**

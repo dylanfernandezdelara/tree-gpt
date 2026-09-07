@@ -1,10 +1,4 @@
 import { getSessionUser } from "./auth.js";
-import {
-	optionalReasoning,
-	parseReasoningDetails,
-	reasoningDetailsSize,
-	type ReasoningDetails,
-} from "./reasoning.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const CHAT_MODEL = "meta/muse-spark-1.3-contributor";
@@ -24,13 +18,11 @@ export type CompletionRole = "user" | "assistant";
 export type CompletionMessage = {
 	role: CompletionRole;
 	content: string;
-	reasoningDetails?: ReasoningDetails;
 };
 
 export type Completion = {
 	model: string;
 	content: string;
-	reasoningDetails?: ReasoningDetails;
 };
 
 export type CompletionFailure = {
@@ -97,7 +89,6 @@ export async function handleOpenRouterRequest(
 		ok: true,
 		model: completion.value.model,
 		message: completion.value.content,
-		reasoningDetails: completion.value.reasoningDetails,
 	});
 }
 
@@ -165,16 +156,23 @@ export async function requestCompletion(
 		model: string;
 		messages: OpenRouterMessage[];
 		max_tokens: number;
-		reasoning: { effort: "minimal" };
+		reasoning: { effort: "minimal"; exclude: true };
 		session_id?: string;
 	} = {
 		model: CHAT_MODEL,
 		messages: toOpenRouterMessages(messages),
 		// Muse Spark still spends some of max_tokens on hidden reasoning even
 		// at "minimal". 1024 often finishes with content: null and
-		// finish_reason "length".
+		// finish_reason "length". `exclude` only hides the reasoning trace
+		// from the response (the model still reasons and bills for it); it
+		// keeps the non-streaming reply small so the reader is not left
+		// waiting on thinking bytes, and leaves nothing to store or echo.
+		// `exclude` is part of the unified reasoning object all OpenRouter
+		// models accept, and the live catalog lists `minimal` in this
+		// model's supported_efforts with reasoning mandatory — so this is
+		// the fastest legal setting, no fallback needed.
 		max_tokens: 4096,
-		reasoning: { effort: "minimal" },
+		reasoning: { effort: "minimal", exclude: true },
 	};
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
@@ -292,16 +290,11 @@ function parseMessages(
 			return { ok: false, error: "messages content is too long" };
 		}
 
-		const reasoning = parseAssistantReasoning(item.role, item);
-		if (!reasoning.ok) {
-			return reasoning;
-		}
-
-		parsed.push({
-			role: item.role,
-			content,
-			...optionalReasoning(item.role, reasoning.value),
-		});
+		// Legacy clients (and stored chats) may still carry reasoningDetails
+		// blobs. They are accepted and dropped: plain chat never sends
+		// `tools`, so OpenRouter has no tool-use continuity to preserve and
+		// echoing old thinking only slows the next reply.
+		parsed.push({ role: item.role, content });
 	}
 
 	return { ok: true, messages: capHistory(parsed) };
@@ -318,7 +311,7 @@ function capHistory(messages: CompletionMessage[]): CompletionMessage[] {
 		if (!next) {
 			break;
 		}
-		total += next.content.length + reasoningDetailsSize(next.reasoningDetails);
+		total += next.content.length;
 		if (total > MAX_HISTORY_CHARS) {
 			break;
 		}
@@ -336,21 +329,6 @@ type ParsedUpstream = {
 	completion: Completion;
 	finishReason?: string;
 };
-
-function parseAssistantReasoning(
-	role: CompletionRole,
-	item: object,
-): { ok: true; value?: ReasoningDetails } | { ok: false; error: string } {
-	const raw = "reasoningDetails" in item ? item.reasoningDetails : undefined;
-	const parsed = parseReasoningDetails(raw);
-	if (!parsed.ok) {
-		return parsed;
-	}
-	if (role !== "assistant" && parsed.value) {
-		return { ok: false, error: "reasoningDetails is only valid on assistant messages" };
-	}
-	return parsed;
-}
 
 function parseCompletion(payload: unknown): ParsedUpstream | null {
 	if (typeof payload !== "object" || payload === null) {
@@ -385,22 +363,9 @@ function parseCompletion(payload: unknown): ParsedUpstream | null {
 			? first.finish_reason
 			: undefined;
 
-	const rawDetails = "reasoning_details" in message ? message.reasoning_details : undefined;
-	if (rawDetails !== undefined && rawDetails !== null) {
-		const details = parseReasoningDetails(rawDetails);
-		if (!details.ok) {
-			return null;
-		}
-		return {
-			completion: {
-				model: payload.model,
-				content,
-				...optionalReasoning("assistant", details.value),
-			},
-			finishReason,
-		};
-	}
-
+	// Any reasoning_details OpenRouter returns (e.g. when `exclude` is not
+	// honored) are deliberately dropped: there is no tool loop to continue,
+	// and keeping them would only bloat the next request.
 	return {
 		completion: { model: payload.model, content },
 		finishReason,
@@ -410,17 +375,10 @@ function parseCompletion(payload: unknown): ParsedUpstream | null {
 type OpenRouterMessage = {
 	role: CompletionRole;
 	content: string;
-	reasoning_details?: ReasoningDetails;
 };
 
 function toOpenRouterMessages(messages: readonly CompletionMessage[]): OpenRouterMessage[] {
-	return messages.map((message) => {
-		const next: OpenRouterMessage = { role: message.role, content: message.content };
-		if (message.role === "assistant" && message.reasoningDetails) {
-			next.reasoning_details = message.reasoningDetails;
-		}
-		return next;
-	});
+	return messages.map((message) => ({ role: message.role, content: message.content }));
 }
 
 /**
