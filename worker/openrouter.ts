@@ -285,10 +285,19 @@ export type UpstreamEvent = StreamEvent | { type: "heartbeat" };
 /** Safety cap: the trace is display-only, never echoed, so bound it. */
 const MAX_STREAM_REASONING_CHARS = 8_000;
 
+/** Keep-alive while waiting on OpenRouter or a silent stretch of its SSE. */
+const STREAM_HEARTBEAT_MS = 1_000;
+
 /**
  * Starts a streaming completion and returns the translated event objects.
  * Callers that need SSE bytes pipe through encodeSse(); callers that need to
  * observe the reply (persist it) consume the objects directly.
+ *
+ * The Worker Response must exist before the OpenRouter fetch resolves.
+ * Awaiting that fetch in the handler left the isolate with no body: the
+ * edge canceled it as hung (and iOS Safari dropped it on a slow TTFB),
+ * which is the empty-reply bug. Heartbeats start immediately so the
+ * stream is never idle.
  */
 export async function openStreamCompletion(
 	env: Env,
@@ -302,32 +311,93 @@ export async function openStreamCompletion(
 	}
 
 	const model = options?.model ?? DEFAULT_MODEL;
-	// Streaming wants the trace (no `exclude`) so the UI can show thinking
-	// live. History still carries role/content only, so the input side of
-	// the latency fix is unchanged.
-	const upstream = await fetch(OPENROUTER_CHAT_URL, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-			"Content-Type": "application/json",
-			"HTTP-Referer": options?.origin ?? "http://localhost:5173",
-			"X-Title": "treeGPT",
+	return { ok: true, events: connectAndTranslate(env, messages, options, model) };
+}
+
+/**
+ * Heartbeat first, then open OpenRouter, then re-emit its SSE. Upstream
+ * HTTP failures become an `error` event so the caller already has a
+ * stream (and an HTTP response) to write them on.
+ */
+function connectAndTranslate(
+	env: Env,
+	messages: readonly CompletionMessage[],
+	options: CompletionOptions | undefined,
+	model: ModelId,
+): ReadableStream<UpstreamEvent> {
+	const abort = new AbortController();
+	return new ReadableStream<UpstreamEvent>({
+		async start(controller) {
+			let finished = false;
+			const emit = (event: UpstreamEvent) => {
+				if (!finished) {
+					controller.enqueue(event);
+				}
+			};
+			const close = () => {
+				if (finished) {
+					return;
+				}
+				finished = true;
+				try {
+					controller.close();
+				} catch {
+					// Consumer already gone.
+				}
+			};
+			const beat = setInterval(() => emit({ type: "heartbeat" }), STREAM_HEARTBEAT_MS);
+			emit({ type: "heartbeat" });
+			try {
+				// Streaming wants the trace (no `exclude`) so the UI can show
+				// thinking live. History still carries role/content only.
+				const upstream = await fetch(OPENROUTER_CHAT_URL, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+						"Content-Type": "application/json",
+						"HTTP-Referer": options?.origin ?? "http://localhost:5173",
+						"X-Title": "treeGPT",
+					},
+					body: JSON.stringify({
+						model,
+						messages: toOpenRouterMessages(messages),
+						max_tokens: 4096,
+						reasoning: reasoningFor(model, true, options?.effort),
+						stream: true,
+						...(options?.sessionId ? { session_id: options.sessionId } : {}),
+					}),
+					signal: abort.signal,
+				});
+				if (!upstream.ok || !upstream.body) {
+					const failure = await upstreamFailure(upstream);
+					emit({ type: "error", error: failure.message });
+					return;
+				}
+				const reader = translateStream(upstream.body, model).getReader();
+				try {
+					for (;;) {
+						const { done, value } = await reader.read();
+						if (done) {
+							break;
+						}
+						emit(value);
+					}
+				} finally {
+					reader.releaseLock();
+				}
+			} catch {
+				if (!abort.signal.aborted) {
+					emit({ type: "error", error: "Stream interrupted" });
+				}
+			} finally {
+				clearInterval(beat);
+				close();
+			}
 		},
-		body: JSON.stringify({
-			model,
-			messages: toOpenRouterMessages(messages),
-			max_tokens: 4096,
-			reasoning: reasoningFor(model, true, options?.effort),
-			stream: true,
-			...(options?.sessionId ? { session_id: options.sessionId } : {}),
-		}),
+		cancel() {
+			abort.abort();
+		},
 	});
-
-	if (!upstream.ok || !upstream.body) {
-		return { ok: false, error: await upstreamFailure(upstream) };
-	}
-
-	return { ok: true, events: translateStream(upstream.body, model) };
 }
 
 function missingKeyFailure(): CompletionFailure {
