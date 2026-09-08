@@ -8,7 +8,7 @@ export function createAuth(env: Env, request: Request) {
 		database: env.DB,
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: origin,
-		trustedOrigins: [origin],
+		trustedOrigins: trustedOriginsFor(origin),
 		emailAndPassword: {
 			enabled: false,
 		},
@@ -79,6 +79,20 @@ function canonicalOrigin(env: Env, requestOrigin: string): string {
 		return new URL(configured).origin;
 	} catch {
 		return requestOrigin;
+	}
+}
+
+/** Apex plus www (or vice versa) so either hostname can start a session. */
+function trustedOriginsFor(origin: string): string[] {
+	try {
+		const url = new URL(origin);
+		const host = url.hostname;
+		const alt = host.startsWith("www.")
+			? host.slice("www.".length)
+			: `www.${host}`;
+		return [url.origin, `${url.protocol}//${alt}`];
+	} catch {
+		return [origin];
 	}
 }
 
