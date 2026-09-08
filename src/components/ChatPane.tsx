@@ -137,7 +137,7 @@ export function ChatPane({
 	 * selection instead of losing it to the textarea.
 	 *
 	 * Controls are exempt: a control click already did something, and pulling the
-	 * caret back here would undo it -- the Thread button, for one, hands focus to
+	 * caret back here would undo it -- the Fork button, for one, hands focus to
 	 * the pane it just opened.
 	 */
 	function startRename() {
@@ -308,7 +308,7 @@ export function ChatPane({
 				<div className="thread-quote">
 					<p className="thread-quote__text">{thread.quote}</p>
 					<IconButton
-						label="Clear threaded passage"
+						label="Clear forked passage"
 						className="thread-quote__clear"
 						onClick={onClearThread}
 					>

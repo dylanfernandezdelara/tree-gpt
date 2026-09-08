@@ -292,7 +292,7 @@ export function ChatThread({
 				>
 					<button type="button" className="selection-action" onClick={() => act(onThread)}>
 						<ForkIcon />
-						Thread
+						Fork
 					</button>
 					<span className="selection-bar__divider" aria-hidden="true" />
 					<button type="button" className="selection-action" onClick={() => act(onBookmark)}>
