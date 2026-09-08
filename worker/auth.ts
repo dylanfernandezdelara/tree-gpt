@@ -1,14 +1,15 @@
 import { betterAuth } from "better-auth";
+import { resolveAuthOrigins } from "./origins.js";
 
 export function createAuth(env: Env, request: Request) {
 	const url = new URL(request.url);
-	const origin = canonicalOrigin(env, url.origin);
+	const { baseURL, trustedOrigins } = resolveAuthOrigins(env, url.origin);
 
 	return betterAuth({
 		database: env.DB,
 		secret: env.BETTER_AUTH_SECRET,
-		baseURL: origin,
-		trustedOrigins: trustedOriginsFor(origin),
+		baseURL,
+		trustedOrigins,
 		emailAndPassword: {
 			enabled: false,
 		},
@@ -57,43 +58,6 @@ export async function getSessionUser(
 		return null;
 	}
 	return { id: user.id, email: user.email };
-}
-
-/**
- * Canonical app origin for Better Auth's baseURL. When APP_ORIGIN is
- * configured (production), Host-derived trust is replaced with that origin
- * plus its www/apex twin, so a request arriving on any other hostname
- * cannot widen what the session layer trusts. Unset (local dev): the
- * request origin, preserving current behavior. An unparseable value
- * falls back to the request origin rather than breaking auth.
- */
-function canonicalOrigin(env: Env, requestOrigin: string): string {
-	// APP_ORIGIN is an optional plaintext Worker variable, so it is read
-	// defensively instead of added to the generated Env type.
-	const raw = (env as unknown as { APP_ORIGIN?: unknown }).APP_ORIGIN;
-	const configured = typeof raw === "string" ? raw.trim() : "";
-	if (!configured) {
-		return requestOrigin;
-	}
-	try {
-		return new URL(configured).origin;
-	} catch {
-		return requestOrigin;
-	}
-}
-
-/** Apex plus www (or vice versa) so either hostname can start a session. */
-function trustedOriginsFor(origin: string): string[] {
-	try {
-		const url = new URL(origin);
-		const host = url.hostname;
-		const alt = host.startsWith("www.")
-			? host.slice("www.".length)
-			: `www.${host}`;
-		return [url.origin, `${url.protocol}//${alt}`];
-	} catch {
-		return [origin];
-	}
 }
 
 export async function ensureDomainUser(

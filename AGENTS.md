@@ -8,7 +8,7 @@ Copy `.dev.vars.example` to `.dev.vars` and set:
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from a GitHub OAuth App (not a GitHub App)
 - `BETTER_AUTH_SECRET` — random, at least 32 characters (`openssl rand -base64 32`)
 
-GitHub OAuth callback for local: `http://localhost:5173/api/auth/callback/github`. Production is `https://forkgpt.app` — add `https://forkgpt.app/api/auth/callback/github` on the GitHub OAuth App. Add the same path on each `workers.dev` or preview origin you use.
+GitHub OAuth callback for local: `http://localhost:5173/api/auth/callback/github`. Production is `https://forkgpt.app` (`www` redirects to apex) — add `https://forkgpt.app/api/auth/callback/github` on the GitHub OAuth App. Add the same path on a `workers.dev` or preview origin only if you need to sign in there.
 
 Apply D1 migrations, then start the Vite frontend and Cloudflare Worker together at http://localhost:5173:
 

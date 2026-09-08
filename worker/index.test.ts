@@ -49,6 +49,18 @@ describe("worker fetch", () => {
 		).rejects.toThrow("auth boom");
 	});
 
+	it("redirects www of APP_ORIGIN to the apex before auth", async () => {
+		const { db } = makeDb({});
+		const response = await worker.fetch(
+			new Request("https://www.forkgpt.app/api/auth/ok"),
+			{ ...envWith(db), APP_ORIGIN: "https://forkgpt.app" },
+			ctx(),
+		);
+		expect(response.status).toBe(301);
+		expect(response.headers.get("location")).toBe("https://forkgpt.app/api/auth/ok");
+		expect(handleAuthRequest).not.toHaveBeenCalled();
+	});
+
 	it("routes every method on /api/chats?summary=1 to the tree 405", async () => {
 		const { db } = makeDb({});
 		const response = await worker.fetch(

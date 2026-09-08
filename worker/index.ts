@@ -1,6 +1,7 @@
 import { handleAuthRequest } from "./auth.js";
 import { handleChatsRequest } from "./chats.js";
 import { handleOpenRouterRequest } from "./openrouter.js";
+import { redirectToAppOrigin } from "./origins.js";
 import { fail } from "./tree.js";
 import { handleTreeRequest } from "./tree-routes.js";
 import { isId } from "./tree-types.js";
@@ -9,6 +10,10 @@ import { handleTurnRequest } from "./turns.js";
 export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
+		const apex = redirectToAppOrigin(url, env);
+		if (apex) {
+			return Response.redirect(apex.href, 301);
+		}
 
 		if (url.pathname.startsWith("/api/auth")) {
 			return handleAuthRequest(request, env);
