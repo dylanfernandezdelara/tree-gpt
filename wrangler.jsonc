@@ -10,10 +10,10 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": true,
 	"preview_urls": true,
-	// www.forkgpt.app is attached only for its DNS record and certificate; a
-	// Single Redirect rule on the zone sends it to the apex before the Worker.
 	"routes": [
 		{ "pattern": "forkgpt.app", "custom_domain": true },
+		// Attached only for its DNS record and certificate; a Single Redirect
+		// rule on the zone sends www to the apex before the Worker runs.
 		{ "pattern": "www.forkgpt.app", "custom_domain": true },
 	],
 	"assets": {
