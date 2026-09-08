@@ -192,24 +192,21 @@ export function reasoningFor(
 	return { effort: effort ?? DEFAULT_EFFORT[model], ...exclude };
 }
 
-export async function requestCompletion(
+function fetchOpenRouter(
 	env: Env,
 	messages: readonly CompletionMessage[],
-	options?: CompletionOptions,
-): Promise<{ ok: true; value: Completion } | { ok: false; error: CompletionFailure }> {
-	if (!env.OPENROUTER_API_KEY) {
-		return { ok: false, error: missingKeyFailure() };
-	}
-
-	const model = options?.model ?? DEFAULT_MODEL;
+	options: CompletionOptions | undefined,
+	init: { model: ModelId; stream: boolean; signal?: AbortSignal },
+): Promise<Response> {
 	const body: {
 		model: string;
 		messages: OpenRouterMessage[];
 		max_tokens: number;
 		reasoning: Record<string, string | number | boolean>;
+		stream?: boolean;
 		session_id?: string;
 	} = {
-		model,
+		model: init.model,
 		messages: toOpenRouterMessages(messages),
 		// Muse Spark still spends some of max_tokens on hidden reasoning even
 		// at "minimal". 1024 often finishes with content: null and
@@ -220,13 +217,16 @@ export async function requestCompletion(
 		// `exclude` is part of the unified reasoning object all OpenRouter
 		// models accept.
 		max_tokens: 4096,
-		reasoning: reasoningFor(model, false, options?.effort),
+		reasoning: reasoningFor(init.model, init.stream, options?.effort),
 	};
+	if (init.stream) {
+		body.stream = true;
+	}
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
 	}
 
-	const upstream = await fetch(OPENROUTER_CHAT_URL, {
+	return fetch(OPENROUTER_CHAT_URL, {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
@@ -235,7 +235,21 @@ export async function requestCompletion(
 			"X-Title": "treeGPT",
 		},
 		body: JSON.stringify(body),
+		signal: init.signal,
 	});
+}
+
+export async function requestCompletion(
+	env: Env,
+	messages: readonly CompletionMessage[],
+	options?: CompletionOptions,
+): Promise<{ ok: true; value: Completion } | { ok: false; error: CompletionFailure }> {
+	if (!env.OPENROUTER_API_KEY) {
+		return { ok: false, error: missingKeyFailure() };
+	}
+
+	const model = options?.model ?? DEFAULT_MODEL;
+	const upstream = await fetchOpenRouter(env, messages, options, { model, stream: false });
 
 	if (!upstream.ok) {
 		return { ok: false, error: await upstreamFailure(upstream) };
@@ -277,8 +291,8 @@ export type StreamEvent =
 
 /**
  * What translateStream yields: client events plus keep-alive heartbeats.
- * Heartbeats exist only so encodeSse can keep the connection warm through
- * long encrypted-reasoning stretches; object consumers ignore them.
+ * Heartbeats exist only so encodeSse can keep the connection warm while
+ * opening OpenRouter and through silent SSE; object consumers ignore them.
  */
 export type UpstreamEvent = StreamEvent | { type: "heartbeat" };
 
@@ -311,93 +325,23 @@ export async function openStreamCompletion(
 	}
 
 	const model = options?.model ?? DEFAULT_MODEL;
-	return { ok: true, events: connectAndTranslate(env, messages, options, model) };
-}
-
-/**
- * Heartbeat first, then open OpenRouter, then re-emit its SSE. Upstream
- * HTTP failures become an `error` event so the caller already has a
- * stream (and an HTTP response) to write them on.
- */
-function connectAndTranslate(
-	env: Env,
-	messages: readonly CompletionMessage[],
-	options: CompletionOptions | undefined,
-	model: ModelId,
-): ReadableStream<UpstreamEvent> {
-	const abort = new AbortController();
-	return new ReadableStream<UpstreamEvent>({
-		async start(controller) {
-			let finished = false;
-			const emit = (event: UpstreamEvent) => {
-				if (!finished) {
-					controller.enqueue(event);
-				}
-			};
-			const close = () => {
-				if (finished) {
-					return;
-				}
-				finished = true;
-				try {
-					controller.close();
-				} catch {
-					// Consumer already gone.
-				}
-			};
-			const beat = setInterval(() => emit({ type: "heartbeat" }), STREAM_HEARTBEAT_MS);
-			emit({ type: "heartbeat" });
-			try {
-				// Streaming wants the trace (no `exclude`) so the UI can show
-				// thinking live. History still carries role/content only.
-				const upstream = await fetch(OPENROUTER_CHAT_URL, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
-						"Content-Type": "application/json",
-						"HTTP-Referer": options?.origin ?? "http://localhost:5173",
-						"X-Title": "treeGPT",
-					},
-					body: JSON.stringify({
-						model,
-						messages: toOpenRouterMessages(messages),
-						max_tokens: 4096,
-						reasoning: reasoningFor(model, true, options?.effort),
-						stream: true,
-						...(options?.sessionId ? { session_id: options.sessionId } : {}),
-					}),
-					signal: abort.signal,
-				});
-				if (!upstream.ok || !upstream.body) {
-					const failure = await upstreamFailure(upstream);
-					emit({ type: "error", error: failure.message });
-					return;
-				}
-				const reader = translateStream(upstream.body, model).getReader();
-				try {
-					for (;;) {
-						const { done, value } = await reader.read();
-						if (done) {
-							break;
-						}
-						emit(value);
-					}
-				} finally {
-					reader.releaseLock();
-				}
-			} catch {
-				if (!abort.signal.aborted) {
-					emit({ type: "error", error: "Stream interrupted" });
-				}
-			} finally {
-				clearInterval(beat);
-				close();
+	// Streaming wants the trace (no `exclude`) so the UI can show thinking
+	// live. History still carries role/content only. The fetch stays inside
+	// translateStream so heartbeats start before OpenRouter answers.
+	return {
+		ok: true,
+		events: translateStream(async (signal) => {
+			const upstream = await fetchOpenRouter(env, messages, options, {
+				model,
+				stream: true,
+				signal,
+			});
+			if (!upstream.ok || !upstream.body) {
+				return { ok: false, error: (await upstreamFailure(upstream)).message };
 			}
-		},
-		cancel() {
-			abort.abort();
-		},
-	});
+			return { ok: true, body: upstream.body };
+		}, model),
+	};
 }
 
 function missingKeyFailure(): CompletionFailure {
@@ -471,17 +415,24 @@ export function encodeSse<T extends { type: string }>(): TransformStream<T, Uint
 	});
 }
 
+type OpenedUpstream =
+	| { ok: true; body: ReadableStream<Uint8Array> }
+	| { ok: false; error: string };
+
 /**
- * Re-emits OpenRouter SSE as our minimal StreamEvent protocol. Upstream
- * `reasoning_details` deltas become display-only `reasoning` text: they are
- * never stored server-side and never echoed on later turns.
+ * Opens upstream, then re-emits OpenRouter SSE as our StreamEvent protocol.
+ * Heartbeats start before `open` resolves so the Worker Response is never
+ * idle (the empty-reply hang). Empty frames also heartbeat through long
+ * encrypted-reasoning stretches. `reasoning_details` become display-only
+ * `reasoning` text: never stored server-side, never echoed on later turns.
  */
 function translateStream(
-	upstream: ReadableStream<Uint8Array>,
+	open: (signal: AbortSignal) => Promise<OpenedUpstream>,
 	fallbackModel: string = DEFAULT_MODEL,
 ): ReadableStream<UpstreamEvent> {
 	const decoder = new TextDecoder();
-	const reader = upstream.getReader();
+	const abort = new AbortController();
+	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 	let buffer = "";
 	let model = fallbackModel;
 	let reasoningSent = 0;
@@ -511,7 +462,15 @@ function translateStream(
 					// Consumer already gone; nothing to unwind.
 				}
 			};
+			const beat = setInterval(heartbeat, STREAM_HEARTBEAT_MS);
+			heartbeat();
 			try {
+				const opened = await open(abort.signal);
+				if (!opened.ok) {
+					finish({ type: "error", error: opened.error });
+					return;
+				}
+				reader = opened.body.getReader();
 				for (;;) {
 					const { done, value } = await reader.read();
 					if (done) {
@@ -528,17 +487,11 @@ function translateStream(
 						}
 						for (const event of collected) {
 							if (event === "upstream-error") {
-								emit({ type: "error", error: "OpenRouter returned an error" });
-								finished = true;
+								finish({ type: "error", error: "OpenRouter returned an error" });
 								try {
 									await reader.cancel();
 								} catch {
 									// Already settled; nothing to unwind.
-								}
-								try {
-									controller.close();
-								} catch {
-									// Consumer already gone; nothing to unwind.
 								}
 								return;
 							}
@@ -556,13 +509,25 @@ function translateStream(
 				}
 				finish({ type: "done", model });
 			} catch {
-				finish({ type: "error", error: "Stream interrupted" });
+				if (!abort.signal.aborted) {
+					finish({ type: "error", error: "Stream interrupted" });
+				}
+			} finally {
+				clearInterval(beat);
+				if (!finished) {
+					try {
+						controller.close();
+					} catch {
+						// Consumer already gone.
+					}
+				}
 			}
 		},
 		async cancel() {
 			finished = true;
+			abort.abort();
 			try {
-				await reader.cancel();
+				await reader?.cancel();
 			} catch {
 				// Reader already settled; nothing to unwind.
 			}
