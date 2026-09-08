@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleOpenRouterRequest, requestCompletion } from "./openrouter.js";
+import {
+	assertWithinTtfbBudget,
+	holdOpenRouterFetch,
+	readFirstChunkWithinBudget,
+} from "./testing/stream-ttfb.js";
 
 vi.mock("./auth.js", () => ({
 	getSessionUser: vi.fn(async () => ({ id: "user-1", email: "user@example.com" })),
@@ -603,31 +608,27 @@ describe("upstream failure disclosure", () => {
 	});
 
 	it("returns the SSE response before OpenRouter answers", async () => {
-		let release!: (value: Response) => void;
-		fetchMock.mockImplementation(
-			() =>
-				new Promise<Response>((resolve) => {
-					release = resolve;
-				}),
-		);
-		const response = await handleOpenRouterRequest(
-			post({ message: "hi", stream: true }),
-			env(),
+		const held = holdOpenRouterFetch();
+		fetchMock.mockImplementation(held.impl);
+		const response = await assertWithinTtfbBudget(
+			handleOpenRouterRequest(post({ message: "hi", stream: true }), env()),
+			"handleOpenRouterRequest (stream)",
 		);
 		expect(response.status).toBe(200);
 		expect(response.headers.get("Content-Type")).toContain("text/event-stream");
 
-		const reader = response.body?.getReader();
-		expect(reader).toBeDefined();
-		const first = await reader!.read();
-		expect(new TextDecoder().decode(first.value)).toContain(":thinking");
+		const { text, reader } = await readFirstChunkWithinBudget(
+			response.body,
+			"handleOpenRouterRequest",
+		);
+		expect(text).toContain(":thinking");
 
-		release(
+		held.release(
 			new Response(`data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n`, {
 				status: 200,
 			}),
 		);
-		await reader!.cancel();
+		await reader.cancel();
 	});
 
 	it("reports a missing server key generically", async () => {

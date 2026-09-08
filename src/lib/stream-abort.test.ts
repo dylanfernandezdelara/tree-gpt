@@ -34,4 +34,12 @@ describe("streamFailureAction", () => {
 			message: "Couldn't reach the server. Check your connection and try again.",
 		});
 	});
+
+	it("keeps the assistant placeholder as an error when the stream dies (empty-reply UI)", () => {
+		// A dropped connection used to take the same path as Stop and delete
+		// the placeholder, leaving only the user bubble and no Retry.
+		expect(streamFailureAction(new AbortController().signal, true).type).toBe("error");
+		expect(streamFailureAction(aborted(), true).type).toBe("error");
+		expect(streamFailureAction(aborted(STREAM_ABORT.stop), true).type).toBe("drop");
+	});
 });
