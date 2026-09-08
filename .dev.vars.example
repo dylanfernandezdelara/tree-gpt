@@ -2,7 +2,3 @@ OPENROUTER_API_KEY=
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 BETTER_AUTH_SECRET=
-# Optional: pin Better Auth on the production hostname. wrangler.jsonc sets
-# APP_ORIGIN=https://forkgpt.app for deploys; loopback ignores it so local
-# `npm run dev` keeps http://localhost:5173. Uncomment to override.
-# APP_ORIGIN=

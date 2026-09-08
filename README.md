@@ -13,7 +13,7 @@ npm run db:migrate:local
 npm run dev # http://localhost:5173
 ```
 
-Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). Production is `https://forkgpt.app` (`APP_ORIGIN` in `wrangler.jsonc`; `www` redirects there). Local and preview hosts keep their own origin. GitHub OAuth callback: `https://forkgpt.app/api/auth/callback/github`.
+Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). Production is `https://forkgpt.app` (custom domain in `wrangler.jsonc`). `www.forkgpt.app` is redirected to the apex by a Single Redirect rule on the Cloudflare zone, not by the Worker. Better Auth derives its origin from each request, so every hostname attached to the Worker (production, `workers.dev`, previews) works once its callback `<origin>/api/auth/callback/github` is registered on the GitHub OAuth App.
 
 ## API
 

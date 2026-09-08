@@ -1,15 +1,18 @@
 import { betterAuth } from "better-auth";
-import { resolveAuthOrigins } from "./origins.js";
 
+/**
+ * Cloudflare routes by Host, so the Worker only ever sees hostnames that are
+ * attached to it (forkgpt.app, workers.dev, previews). Each one is its own
+ * Better Auth origin; www is redirected to the apex at the zone edge.
+ */
 export function createAuth(env: Env, request: Request) {
-	const url = new URL(request.url);
-	const { baseURL, trustedOrigins } = resolveAuthOrigins(env, url.origin);
+	const origin = new URL(request.url).origin;
 
 	return betterAuth({
 		database: env.DB,
 		secret: env.BETTER_AUTH_SECRET,
-		baseURL,
-		trustedOrigins,
+		baseURL: origin,
+		trustedOrigins: [origin],
 		emailAndPassword: {
 			enabled: false,
 		},
