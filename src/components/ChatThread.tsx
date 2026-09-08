@@ -15,8 +15,6 @@ import type { Chat } from "../types";
 import { ArrowDownIcon, BookmarkIcon, ForkIcon } from "./Icons";
 import { MessageView } from "./Message";
 
-const DISCLAIMER = "Fork can make mistakes. Check important info.";
-
 /** How far (px) from the bottom still counts as "at the bottom". */
 const BOTTOM_THRESHOLD = 24;
 /** Gap between the composer and the bottom edge of the thread area. */
@@ -50,9 +48,9 @@ const HIGHLIGHT_NAME = "treegpt-bookmark";
 const HIGHLIGHT_MS = 2500;
 
 /**
- * Scrollable conversation with the composer floating over it. Messages and the
- * closing disclaimer scroll behind the composer and show faded beneath it; a
- * scroll-to-bottom button appears while the reader is scrolled up.
+ * Scrollable conversation with the composer floating over it. Messages scroll
+ * behind the composer and show faded beneath it; a scroll-to-bottom button
+ * appears while the reader is scrolled up.
  */
 export function ChatThread({
 	chat,
@@ -129,7 +127,12 @@ export function ChatThread({
 		}
 		const observer = new ResizeObserver((entries) => {
 			const height = entries[0]?.contentRect.height ?? 0;
-			setInset(Math.round(height) + COMPOSER_MARGIN);
+			// An unfocused pane has no composer, and collapsing the space it will
+			// come back into would shift the whole conversation on every focus
+			// change. Keep the last real measurement instead.
+			if (height > 0) {
+				setInset(Math.round(height) + COMPOSER_MARGIN);
+			}
 		});
 		observer.observe(float);
 		return () => observer.disconnect();
@@ -266,7 +269,6 @@ export function ChatThread({
 						</Fragment>
 					))}
 					<ForkLinks forks={trailing} onOpen={onOpenFork} />
-					<p className="thread__disclaimer">{DISCLAIMER}</p>
 				</div>
 			</div>
 			<div className="thread-fade" aria-hidden="true" />

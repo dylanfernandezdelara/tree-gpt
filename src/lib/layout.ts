@@ -237,29 +237,41 @@ export function rightNeighbor(root: LayoutNode, paneId: string): PaneLeaf | null
 }
 
 /**
- * Put a chat next to a pane, preferring the right. Falls back through
- * replacing the pane already on the right, splitting downward, and finally
- * taking over the pane itself, so there is always somewhere to land.
- * Returns the pane the chat ended up in.
+ * Which way to halve a pane of this shape so both halves stay as square as
+ * possible. Splitting sideways gives halves of w/2 x h, downward w x h/2, so
+ * the wider pane splits sideways and the taller one splits down. A square pane
+ * is a tie, broken towards "right" to match how a full screen first divides.
+ */
+export function squarestSplit(width: number, height: number): "right" | "bottom" {
+	return width >= height ? "right" : "bottom";
+}
+
+/**
+ * Put a chat next to a pane, splitting whichever way keeps both halves closest
+ * to square. Falls back through replacing the pane already on the right, then
+ * the other axis, and finally taking over the pane itself, so there is always
+ * somewhere to land. Returns the pane the chat ended up in.
  */
 export function placeBeside(
 	root: LayoutNode,
 	paneId: string,
 	chatId: string | null,
+	prefer: "right" | "bottom" = "right",
 ): { root: LayoutNode; paneId: string } {
 	if (!findPane(root, paneId)) {
 		return { root, paneId };
 	}
-	if (canSplit(root, paneId, "right")) {
-		const split = splitPane(root, paneId, "right", chatId);
+	if (canSplit(root, paneId, prefer)) {
+		const split = splitPane(root, paneId, prefer, chatId);
 		return { root: split.root, paneId: split.newPaneId };
 	}
 	const neighbor = rightNeighbor(root, paneId);
 	if (neighbor) {
 		return { root: setPaneChat(root, neighbor.id, chatId), paneId: neighbor.id };
 	}
-	if (canSplit(root, paneId, "bottom")) {
-		const split = splitPane(root, paneId, "bottom", chatId);
+	const other = prefer === "right" ? "bottom" : "right";
+	if (canSplit(root, paneId, other)) {
+		const split = splitPane(root, paneId, other, chatId);
 		return { root: split.root, paneId: split.newPaneId };
 	}
 	return { root: setPaneChat(root, paneId, chatId), paneId };

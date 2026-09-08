@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import {
+	useEffect,
+	useRef,
+	useState,
+	type DragEvent,
+	type MouseEvent as ReactMouseEvent,
+} from "react";
 import {
 	dropSideAt,
 	hasDragPayload,
@@ -119,6 +125,27 @@ export function ChatPane({
 		}
 	}, [thread]);
 
+	/**
+	 * Clicking anywhere in a pane should leave the caret in its composer, so a
+	 * newly focused window can be typed into without a second click. Runs on
+	 * click rather than mousedown so a drag that highlighted a passage keeps its
+	 * selection instead of losing it to the textarea.
+	 *
+	 * Controls are exempt: a control click already did something, and pulling the
+	 * caret back here would undo it -- the Thread button, for one, hands focus to
+	 * the pane it just opened.
+	 */
+	function handlePaneClick(event: ReactMouseEvent<HTMLElement>) {
+		if ((event.target as HTMLElement).closest("button, a, input, textarea, select")) {
+			return;
+		}
+		const selection = window.getSelection();
+		if (selection && !selection.isCollapsed) {
+			return;
+		}
+		inputRef.current?.focus();
+	}
+
 	function accepts(target: DropTarget): boolean {
 		return target === "swap" ? ability.swap : ability.sides[target];
 	}
@@ -237,8 +264,10 @@ export function ChatPane({
 		.filter(Boolean)
 		.join(" ");
 
-	const composer = (
-		<>
+	// Only the focused pane offers a composer; the others are read-only until
+	// they are clicked, which is what focuses them.
+	const composer = !focused ? null : (
+		<div className="composer-rise">
 			{thread ? (
 				<div className="thread-quote">
 					<p className="thread-quote__text">{thread.quote}</p>
@@ -261,7 +290,7 @@ export function ChatPane({
 				autoFocus={focused}
 				inputRef={inputRef}
 			/>
-		</>
+		</div>
 	);
 
 	return (
@@ -270,6 +299,7 @@ export function ChatPane({
 			data-pane-id={pane.id}
 			onMouseDownCapture={onFocus}
 			onFocusCapture={onFocus}
+			onClick={handlePaneClick}
 			onDragEnter={handleBodyDragEnter}
 			onDragOver={handleBodyDragOver}
 			onDragLeave={handleBodyDragLeave}
@@ -314,13 +344,15 @@ export function ChatPane({
 				/>
 			) : (
 				<EmptyState>
-					<div className="composer-stack">
-						{composer}
-						<div className="picker-row">
-							<ModelSelector value={model} onChange={onModelChange} />
-							<EffortSelector model={model} value={effort} onChange={onEffortChange} />
+					{composer ? (
+						<div className="composer-stack">
+							{composer}
+							<div className="picker-row">
+								<ModelSelector value={model} onChange={onModelChange} />
+								<EffortSelector model={model} value={effort} onChange={onEffortChange} />
+							</div>
 						</div>
-					</div>
+					) : null}
 				</EmptyState>
 			)}
 			<div

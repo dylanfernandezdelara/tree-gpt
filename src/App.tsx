@@ -25,6 +25,7 @@ import {
 	movePane,
 	NO_DROPS,
 	placeBeside,
+	squarestSplit,
 	removePane,
 	setPaneChat,
 	splitPane,
@@ -394,10 +395,11 @@ function ChatApp({ user }: { user: AuthUser }) {
 	 * otherwise reusing the pane already there, then below, then in place.
 	 */
 	function placeChat(paneId: string, chatId: string | null, anchor?: ThreadAnchor) {
+		const prefer = preferredSplit(paneId);
 		updateStore((prev) => {
 			const placed =
 				prev.view === "chats"
-					? placeBeside(prev.layout, paneId, chatId)
+					? placeBeside(prev.layout, paneId, chatId, prefer)
 					: openBookmarkPane(prev.bookmarkLayout, prev.bookmarkFocusedPaneId, chatId ?? "");
 			if (anchor) {
 				setThreads((current) => ({ ...current, [placed.paneId]: anchor }));
@@ -411,6 +413,18 @@ function ChatApp({ user }: { user: AuthUser }) {
 	 * existing "open in two panes" rule forks it on the next send; the anchor
 	 * only decides how that fork is recorded.
 	 */
+	/**
+	 * Which way a pane should divide, from its shape on screen. The layout tree
+	 * knows how a pane was reached, not how wide the window is, so this reads the
+	 * rendered element; an unmeasurable pane falls back to the old rightward split.
+	 */
+	function preferredSplit(paneId: string): "right" | "bottom" {
+		const element = document.querySelector<HTMLElement>(
+			`[data-pane-id="${CSS.escape(paneId)}"]`,
+		);
+		return element ? squarestSplit(element.clientWidth, element.clientHeight) : "right";
+	}
+
 	function startThread(paneId: string, messageId: string, quote: string) {
 		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		if (!pane?.chatId) {

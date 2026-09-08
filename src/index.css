@@ -610,20 +610,6 @@ button {
 	padding: 12px 0 calc(var(--composer-inset) + 24px);
 }
 
-/*
- * Closes every chat; scrolls with the messages like any other content.
- * `margin-top: auto` pins it just above the composer while the conversation is
- * short; the padding keeps the same gap once the messages fill the pane.
- */
-.thread__disclaimer {
-	margin: auto 0 0;
-	padding-top: 24px;
-	font-size: 12px;
-	line-height: 16px;
-	color: var(--text-tertiary);
-	text-align: center;
-}
-
 /* Softens content passing beneath and beside the floating composer. */
 .thread-fade {
 	position: absolute;
@@ -648,6 +634,28 @@ button {
 	left: 0;
 	padding: 0 64px;
 	pointer-events: none;
+}
+
+/*
+ * The composer only mounts on the pane that has focus, so it arrives rather
+ * than simply being there. 10px keeps the rise inside the pane: the float sits
+ * 16px off the bottom and nothing here clips.
+ */
+@keyframes composer-rise {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+.composer-rise,
+.composer-stack {
+	animation: composer-rise 180ms ease-out;
 }
 
 .composer-float > * {
@@ -948,7 +956,7 @@ details > .thinking__label {
 	font-size: 13px;
 	line-height: 18px;
 	font-weight: 500;
-	color: var(--accent);
+	color: var(--brand);
 }
 
 .fork-link:hover .fork-link__title {
@@ -1016,7 +1024,7 @@ details > .thinking__label {
 	max-width: var(--thread-width);
 	margin: 0 auto 8px;
 	padding: 8px 8px 8px 12px;
-	border-left: 3px solid var(--accent);
+	border-left: 3px solid var(--brand);
 	border-radius: 0 8px 8px 0;
 	background: var(--surface-sidebar);
 }
@@ -1863,7 +1871,7 @@ details > .thinking__label {
 	width: 32px;
 	height: 32px;
 	margin-right: 12px;
-	color: var(--accent);
+	color: var(--brand);
 	opacity: 0;
 }
 
@@ -1881,7 +1889,7 @@ details > .thinking__label {
 }
 
 .bookmarks__resizer:hover {
-	background: var(--accent);
+	background: var(--brand);
 }
 
 .bookmarks__panes {
