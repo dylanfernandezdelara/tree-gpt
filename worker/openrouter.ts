@@ -16,11 +16,37 @@ const MAX_TURN_CHARS = 8_000;
 const MAX_HISTORY = 50;
 const MAX_HISTORY_CHARS = 32_000;
 
-// Per-user generate quota: at most MAX_GENERATES_PER_WINDOW calls per WINDOW_MS.
-// Checked before any upstream call so a runaway client or compromised
-// account cannot burn the server key without bound.
+// Generate quotas, checked before any upstream call so a runaway client or
+// compromised account cannot burn the server key without bound. Per user:
+// MAX_GENERATES_PER_WINDOW calls per WINDOW_MS. Account-wide:
+// MAX_GLOBAL_GENERATES_PER_WINDOW across every user, a circuit breaker so a
+// wave of throwaway sign-ins cannot scale spend linearly. Both are fixed
+// windows aligned to WINDOW_MS.
 const WINDOW_MS = 3_600_000;
 const MAX_GENERATES_PER_WINDOW = 60;
+const MAX_GLOBAL_GENERATES_PER_WINDOW = 1_000;
+
+/** Reported to clients instead of the raw key-configuration problem. */
+const NOT_CONFIGURED = "Chat is not configured on this server";
+
+/**
+ * Atomic fixed-window increment: resets the counter when the stored window is
+ * stale, bumps it otherwise, and returns the new count in one statement so
+ * concurrent requests cannot both observe the pre-increment value.
+ */
+const BUMP_USER_LIMIT_SQL = `
+	INSERT INTO openrouter_limits (user_id, window_start, count) VALUES (?, ?, 1)
+	ON CONFLICT(user_id) DO UPDATE SET
+		count = CASE WHEN window_start = excluded.window_start THEN count + 1 ELSE 1 END,
+		window_start = excluded.window_start
+	RETURNING count`;
+
+const BUMP_GLOBAL_LIMIT_SQL = `
+	INSERT INTO openrouter_global_limits (id, window_start, count) VALUES (1, ?, 1)
+	ON CONFLICT(id) DO UPDATE SET
+		count = CASE WHEN window_start = excluded.window_start THEN count + 1 ELSE 1 END,
+		window_start = excluded.window_start
+	RETURNING count`;
 
 export type CompletionRole = "user" | "assistant";
 
@@ -106,9 +132,11 @@ export async function handleOpenRouterRequest(
 }
 
 /**
- * Fixed-window per-user quota backed by the openrouter_limits table.
- * Read-then-write races can over-admit by a call under concurrency; that
- * fail-open direction is acceptable for spend protection at this scale.
+ * Fixed-window quotas backed by openrouter_limits (per user) and
+ * openrouter_global_limits (account-wide). Each check is a single atomic
+ * upsert that returns the post-increment count, so a burst of concurrent
+ * requests cannot slip past the ceiling. The per-user check runs first so a
+ * throttled user does not eat into the shared window.
  */
 export async function checkRateLimit(
 	db: D1Database,
@@ -116,36 +144,29 @@ export async function checkRateLimit(
 	now: number,
 ): Promise<{ ok: true } | { ok: false; retryAfterMs: number }> {
 	const windowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
+	const retryAfterMs = windowStart + WINDOW_MS - now;
 	try {
-		const row = await db
-			.prepare(`SELECT window_start AS windowStart, count FROM openrouter_limits WHERE user_id = ?`)
-			.bind(userId)
-			.first<{ windowStart: number; count: number }>();
-
-		if (!row || row.windowStart !== windowStart) {
-			await db
-				.prepare(
-					`INSERT INTO openrouter_limits (user_id, window_start, count)
-					 VALUES (?, ?, 1)
-					 ON CONFLICT(user_id) DO UPDATE SET window_start = excluded.window_start, count = 1`,
-				)
-				.bind(userId, windowStart)
-				.run();
-			return { ok: true };
+		const user = await db
+			.prepare(BUMP_USER_LIMIT_SQL)
+			.bind(userId, windowStart)
+			.first<{ count: number }>();
+		if (user && user.count > MAX_GENERATES_PER_WINDOW) {
+			return { ok: false, retryAfterMs };
 		}
 
-		if (row.count >= MAX_GENERATES_PER_WINDOW) {
-			return { ok: false, retryAfterMs: windowStart + WINDOW_MS - now };
+		const global = await db
+			.prepare(BUMP_GLOBAL_LIMIT_SQL)
+			.bind(windowStart)
+			.first<{ count: number }>();
+		if (global && global.count > MAX_GLOBAL_GENERATES_PER_WINDOW) {
+			return { ok: false, retryAfterMs };
 		}
 
-		await db
-			.prepare(`UPDATE openrouter_limits SET count = count + 1 WHERE user_id = ?`)
-			.bind(userId)
-			.run();
 		return { ok: true };
-	} catch {
+	} catch (error) {
 		// Limiter is best-effort spend protection, not an auth boundary:
 		// a D1 failure must not break generate for legitimate users.
+		console.error("Rate limiter unavailable, admitting request", error);
 		return { ok: true };
 	}
 }
@@ -177,13 +198,7 @@ export async function requestCompletion(
 	options?: CompletionOptions,
 ): Promise<{ ok: true; value: Completion } | { ok: false; error: CompletionFailure }> {
 	if (!env.OPENROUTER_API_KEY) {
-		return {
-			ok: false,
-			error: {
-				status: 500,
-				message: "OPENROUTER_API_KEY is not set in .dev.vars",
-			},
-		};
+		return { ok: false, error: missingKeyFailure() };
 	}
 
 	const model = options?.model ?? DEFAULT_MODEL;
@@ -223,15 +238,7 @@ export async function requestCompletion(
 	});
 
 	if (!upstream.ok) {
-		const details = (await upstream.text()).slice(0, 500);
-		return {
-			ok: false,
-			error: {
-				status: 502,
-				message: `OpenRouter returned ${upstream.status}`,
-				details,
-			},
-		};
+		return { ok: false, error: await upstreamFailure(upstream) };
 	}
 
 	const payload: unknown = await upstream.json();
@@ -291,10 +298,7 @@ export async function openStreamCompletion(
 	{ ok: true; events: ReadableStream<UpstreamEvent> } | { ok: false; error: CompletionFailure }
 > {
 	if (!env.OPENROUTER_API_KEY) {
-		return {
-			ok: false,
-			error: { status: 500, message: "OPENROUTER_API_KEY is not set in .dev.vars" },
-		};
+		return { ok: false, error: missingKeyFailure() };
 	}
 
 	const model = options?.model ?? DEFAULT_MODEL;
@@ -320,14 +324,31 @@ export async function openStreamCompletion(
 	});
 
 	if (!upstream.ok || !upstream.body) {
-		const details = (await upstream.text()).slice(0, 500);
-		return {
-			ok: false,
-			error: { status: 502, message: `OpenRouter returned ${upstream.status}`, details },
-		};
+		return { ok: false, error: await upstreamFailure(upstream) };
 	}
 
 	return { ok: true, events: translateStream(upstream.body, model) };
+}
+
+function missingKeyFailure(): CompletionFailure {
+	console.error("OPENROUTER_API_KEY is not set; refusing to generate");
+	return { status: 500, message: NOT_CONFIGURED };
+}
+
+/**
+ * Upstream error bodies describe the server's OpenRouter account (credit
+ * state, key labels, provider diagnostics), so they go to the Worker log
+ * only. Clients get the status code, which is enough to act on.
+ */
+async function upstreamFailure(upstream: Response): Promise<CompletionFailure> {
+	let body = "";
+	try {
+		body = (await upstream.text()).slice(0, 500);
+	} catch {
+		// Body already consumed or unreadable; the status is still worth logging.
+	}
+	console.error(`OpenRouter returned ${upstream.status}`, body);
+	return { status: 502, message: `OpenRouter returned ${upstream.status}` };
 }
 
 export async function requestStreamCompletion(
