@@ -450,8 +450,10 @@ button {
 	transition: background 0.12s ease;
 }
 
-/* The bar being dragged, and the bar it would swap with, share one highlight. */
-.pane__header--dragging,
+/*
+ * The bar a drop would swap with. The bar being DRAGGED is left alone: the
+ * drag chip already shows what is in hand, so highlighting it too was noise.
+ */
 .pane__header--target {
 	background: var(--bubble-bg);
 	color: var(--bubble-text);

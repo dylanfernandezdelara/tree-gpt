@@ -46,8 +46,6 @@ type Props = {
 	onEffortChange: (effort: EffortId) => void;
 	/** What this pane accepts from the drag in progress. */
 	ability: DropAbility;
-	/** This pane is the one being dragged. */
-	dragging: boolean;
 	/** How to label the drag for the cursor: panes move, sidebar chats copy. */
 	dropEffect: "move" | "copy";
 	/** Chats forked from this pane's chat, listed under the last message. */
@@ -93,7 +91,6 @@ export function ChatPane({
 	effort,
 	onEffortChange,
 	ability,
-	dragging,
 	dropEffect,
 	forks,
 	thread,
@@ -298,7 +295,6 @@ export function ChatPane({
 	const title = chat ? chat.title : "New chat";
 	const headerClass = [
 		"pane__header",
-		dragging ? "pane__header--dragging" : "",
 		headerHover && ability.swap ? "pane__header--target" : "",
 	]
 		.filter(Boolean)

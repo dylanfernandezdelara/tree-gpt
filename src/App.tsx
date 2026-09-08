@@ -860,7 +860,6 @@ function ChatApp({ user }: { user: AuthUser }) {
 				ability={
 					view === "chats" && activeLayout ? dropAbility(activeLayout, pane.id, drag) : NO_DROPS
 				}
-				dragging={drag?.kind === "pane" && drag.paneId === pane.id}
 				dropEffect={drag?.kind === "pane" ? "move" : "copy"}
 				forks={(chat && forksOf.get(chat.id)) || NO_FORKS}
 				thread={threads[pane.id] ?? null}
