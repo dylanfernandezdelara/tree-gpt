@@ -7,6 +7,7 @@ import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
+import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
 import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
 import { BookmarksView } from "./components/BookmarksView";
@@ -115,15 +116,14 @@ function App() {
 	const session = authClient.useSession();
 	const user = sessionUser(session.data);
 
-	if (session.isPending) {
-		return (
-			<div className="login-page">
-				<p className="login-page__status">Checking session…</p>
-			</div>
-		);
-	}
-
 	if (!user) {
+		if (session.isPending) {
+			return (
+				<div className="login-page">
+					<p className="login-page__status">Checking session…</p>
+				</div>
+			);
+		}
 		return <LoginPage />;
 	}
 
@@ -174,7 +174,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		const ns = namespace;
 		const controller = new AbortController();
 		for (const pending of pendingRef.current.values()) {
-			pending.abort();
+			pending.abort(STREAM_ABORT.leave);
 		}
 		pendingRef.current.clear();
 		syncRef.current?.dispose();
@@ -509,7 +509,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		history: ChatTurn[],
 		config: { model: ModelId; effort: EffortId },
 	) {
-		pendingRef.current.get(chatId)?.abort();
+		pendingRef.current.get(chatId)?.abort(STREAM_ABORT.superseded);
 		const controller = new AbortController();
 		pendingRef.current.set(chatId, controller);
 		setPendingIds((prev) => new Set(prev).add(chatId));
@@ -551,19 +551,21 @@ function ChatApp({ user }: { user: AuthUser }) {
 				setReply(chatId, replyId, { content: text, pending: false, error: true });
 			}
 		} catch {
-			if (controller.signal.aborted) {
-				// Stopped by the reader: drop the placeholder, keep their message.
+			const action = streamFailureAction(
+				controller.signal,
+				pendingRef.current.get(chatId) === controller,
+			);
+			if (action.type === "ignore") {
+				return;
+			}
+			if (action.type === "drop") {
 				updateChat(chatId, (chat) => ({
 					...chat,
 					messages: chat.messages.filter((m) => m.id !== replyId),
 				}));
-			} else {
-				setReply(chatId, replyId, {
-					content: "Couldn't reach the server. Check your connection and try again.",
-					pending: false,
-					error: true,
-				});
+				return;
 			}
+			setReply(chatId, replyId, { content: action.message, pending: false, error: true });
 		} finally {
 			if (pendingRef.current.get(chatId) === controller) {
 				pendingRef.current.delete(chatId);
@@ -702,7 +704,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 	function stop(paneId: string) {
 		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		if (pane?.chatId) {
-			pendingRef.current.get(pane.chatId)?.abort();
+			pendingRef.current.get(pane.chatId)?.abort(STREAM_ABORT.stop);
 		}
 	}
 
@@ -815,7 +817,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	function deleteChat(id: string) {
-		pendingRef.current.get(id)?.abort();
+		pendingRef.current.get(id)?.abort(STREAM_ABORT.leave);
 		updateStore((prev) => {
 			const lineage = loadLineage(prev.ns);
 			delete lineage[id];

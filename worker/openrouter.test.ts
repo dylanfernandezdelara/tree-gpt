@@ -196,6 +196,10 @@ describe("handleOpenRouterRequest", () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get("Content-Type")).toContain("text/event-stream");
 
+		const events = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
 		const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
 			string,
 			unknown
@@ -205,11 +209,6 @@ describe("handleOpenRouterRequest", () => {
 		// display-only field from history must never be forwarded.
 		expect(upstream.reasoning).toEqual({ effort: "minimal" });
 		expect(JSON.stringify(upstream.messages).includes("reasoning")).toBe(false);
-
-		const events = String(await response.text())
-			.split("\n\n")
-			.filter((frame) => frame.startsWith("data:"))
-			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
 		expect(events).toEqual([
 			{ type: "reasoning", text: "Considering" },
 			{ type: "reasoning", text: " the question" },
@@ -594,10 +593,41 @@ describe("upstream failure disclosure", () => {
 			post({ message: "hi", stream: true }),
 			env(),
 		);
-		expect(response.status).toBe(502);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toContain("text/event-stream");
 		const text = await response.text();
 		expect(text).not.toContain("sk-or-v1");
-		expect(JSON.parse(text)).toEqual({ ok: false, error: "OpenRouter returned 401" });
+		expect(text).not.toContain("credits");
+		expect(text).toContain('"type":"error"');
+		expect(text).toContain("OpenRouter returned 401");
+	});
+
+	it("returns the SSE response before OpenRouter answers", async () => {
+		let release!: (value: Response) => void;
+		fetchMock.mockImplementation(
+			() =>
+				new Promise<Response>((resolve) => {
+					release = resolve;
+				}),
+		);
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi", stream: true }),
+			env(),
+		);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+
+		const reader = response.body?.getReader();
+		expect(reader).toBeDefined();
+		const first = await reader!.read();
+		expect(new TextDecoder().decode(first.value)).toContain(":thinking");
+
+		release(
+			new Response(`data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n`, {
+				status: 200,
+			}),
+		);
+		await reader!.cancel();
 	});
 
 	it("reports a missing server key generically", async () => {
