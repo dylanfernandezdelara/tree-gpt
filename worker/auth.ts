@@ -60,11 +60,11 @@ export async function getSessionUser(
 }
 
 /**
- * Canonical app origin for Better Auth's baseURL/trustedOrigins. When
- * APP_ORIGIN is configured (production), Host-derived trust is replaced
- * with an explicit allowlist of one, so a request arriving on any other
- * hostname cannot widen what the session layer trusts. Unset (local dev):
- * the request origin, preserving current behavior. An unparseable value
+ * Canonical app origin for Better Auth's baseURL. When APP_ORIGIN is
+ * configured (production), Host-derived trust is replaced with that origin
+ * plus its www/apex twin, so a request arriving on any other hostname
+ * cannot widen what the session layer trusts. Unset (local dev): the
+ * request origin, preserving current behavior. An unparseable value
  * falls back to the request origin rather than breaking auth.
  */
 function canonicalOrigin(env: Env, requestOrigin: string): string {
