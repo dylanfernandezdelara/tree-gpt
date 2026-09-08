@@ -314,11 +314,13 @@ describe("handleTurnRequest", () => {
 
 	it("returns 429 when the generate quota is exhausted and writes nothing", async () => {
 		const windowStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+		// The limiter upsert returns the post-increment count: 61 means this
+		// request is the first one past the 60/hour ceiling.
 		const { db, statements } = makeDb({
 			first: firstFor({
 				chats: { "chat-1": sourceChat },
 				messages: { a1: parentLeaf },
-				rateLimit: { windowStart, count: 60 },
+				rateLimit: { windowStart, count: 61 },
 			}),
 		});
 		const { ctx } = makeCtx();

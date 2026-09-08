@@ -17,7 +17,9 @@ Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). In 
 
 ## API
 
-All `/api/chats` and `/api/openrouter` routes require the Better Auth session cookie (`401 { "ok": false, "error": "Unauthorized" }` without one). Ids are client-minted (1–128 chars). Types live in `worker/tree-types.ts`. Messages are immutable tree nodes (`parentId` / `rootId` / `depth`); a chat is a named pointer to a leaf; the messages a pane shows are the root-to-leaf path. Fork = a second pointer into the same tree; redo = a sibling reply under the same user node. `leafId` is the chat's version (every turn moves it, rename does not) and is the CAS token for `/turns`. `generating` on a summary means the leaf is a pending reply younger than 120 s. Signed-in chats persist per user; guests keep chats in the browser. Any unexpected throw on `/api/` (except `/api/auth`) returns `500 { "ok": false, "error": "Internal error" }`.
+All `/api/chats` and `/api/openrouter` routes require the Better Auth session cookie (`401 { "ok": false, "error": "Unauthorized" }` without one). Ids are client-minted (1–128 chars). Types live in `worker/tree-types.ts`. Messages are immutable tree nodes (`parentId` / `rootId` / `depth`); a chat is a named pointer to a leaf; the messages a pane shows are the root-to-leaf path. Fork = a second pointer into the same tree; redo = a sibling reply under the same user node. `leafId` is the chat's version (every turn moves it, rename does not) and is the CAS token for `/turns`. `generating` on a summary means the leaf is a pending reply younger than 120 s. Signed-in chats persist per user; guests keep chats in the browser. Any unexpected throw on `/api/` (except `/api/auth`) returns `500 { "ok": false, "error": "Internal error" }`; unknown `/api/` paths return `404`. Every `/api/` response is `Cache-Control: no-store` (streams keep `no-cache`) and `X-Content-Type-Options: nosniff`.
+
+The OpenRouter key never leaves the Worker: the client only ever calls `/api/*`, every generate route requires a session, the per-user and account-wide quotas are checked before any upstream call, and upstream error bodies are logged rather than returned. Set a monthly credit limit on the key in the OpenRouter dashboard as the final backstop. Static assets ship a CSP and the other browser headers from `public/_headers`.
 
 ### Tree routes
 
@@ -168,12 +170,14 @@ Status codes (JSON unless the stream already opened):
 
 - `400` `"Invalid JSON body"` · `"parentId is invalid"` · `"expectLeaf is invalid"` · `"replyId is invalid"` · `"fork is invalid"` · `"fork.chatId is invalid"` · `"fork.title must be a string"` · `"fork.title must not be empty"` · `"fork.title is too long"` · `"userMessage is invalid"` · `"userMessage.id is invalid"` · `"userMessage content must be a string"` · `"userMessage content must not be empty"` · `"userMessage content is too long"` · `"title must be a string"` · `"title is too long"` · `"stream must be a boolean"` · `"model is not supported"` · `"effort is not supported"` · `"effort is not supported by this model"` · `"parentId is required for redo"` · `"fork is not allowed when creating a chat"` · `"userMessage.id must differ from replyId"` · `"Parent is not in this chat"` · `"Redo requires a user message parent"` · `"Conversation is too deep"` · `"Tree is too large"` · `"Chat limit reached"`
 - `401` `"Unauthorized"`
+- `403` `"Cross-origin request refused"` (a write whose `Origin` header does not match the app origin; applies to every `/api/*` write except `/api/auth`)
 - `404` `"Not found"` · `"Parent not found"`
 - `405` `"Use POST"`
+- `413` `"Request body is too large"` (`Content-Length` over 8 MiB, refused before parsing)
 - `409` `"Chat changed, reload"` (includes `chat`) · `"Chat already exists"` (includes `chat`) · `"Fork target already exists"` (includes `chat` when owned) · `"Reply is still generating"` · `"Reply timed out"` · `"Parent reply is not finished"` · `"Reply was abandoned before it finished"`
 - `429` `"Rate limit exceeded, try again later"` (`Retry-After` seconds)
-- `500` `"OPENROUTER_API_KEY is not set in .dev.vars"` · `"Reserved chat is missing"` · `"Internal error"`
-- `502` `"OpenRouter returned <status>"` · `"OpenRouter returned an empty reply"` · mid-stream `error` events: `"OpenRouter returned an error"` · `"Stream interrupted"` · `"OpenRouter returned an empty reply"` (JSON `502` when `stream` is absent)
+- `500` `"Chat is not configured on this server"` (missing `OPENROUTER_API_KEY`; the cause is logged, not returned) · `"Reserved chat is missing"` · `"Internal error"`
+- `502` `"OpenRouter returned <status>"` (the upstream body is logged server-side, never forwarded) · `"OpenRouter returned an empty reply"` · mid-stream `error` events: `"OpenRouter returned an error"` · `"Stream interrupted"` · `"OpenRouter returned an empty reply"` (JSON `502` when `stream` is absent)
 
 ### Frontend wiring notes
 
@@ -207,7 +211,7 @@ From `worker/tree-types.ts` unless noted:
 - `MAX_CONTENT` 8000 · `MAX_TITLE` 200 · `MAX_ID` 128
 - `MAX_REASONING` 4000 (display-only; never sent upstream)
 - `PENDING_TIMEOUT_MS` 120000
-- Quota: 60 generations per user per hour → `429` with `Retry-After`
+- Quota: 60 generations per user per hour, and 1000 across all users per hour → `429` with `Retry-After`. Both counters are atomic upserts, so concurrent bursts cannot overshoot.
 - Upstream history window (OpenRouter): last 50 turns / 32k chars
 
 ### Fork lineage (proposed, needs agreement)

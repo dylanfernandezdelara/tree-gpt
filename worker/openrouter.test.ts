@@ -454,3 +454,162 @@ describe("model allowlist", () => {
 		expect(events[events.length - 1]).toEqual({ type: "done", model: "openai/gpt-5.6-luna" });
 	});
 });
+
+describe("generate quotas", () => {
+	const fetchMock = vi.fn();
+
+	beforeEach(() => {
+		fetchMock.mockReset();
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "error").mockImplementation(() => {});
+	});
+
+	/** D1 stub whose upsert RETURNING count is scripted per table. */
+	function quotaDb(counts: { user?: number; global?: number }) {
+		const statements: { sql: string; params: unknown[] }[] = [];
+		const db = {
+			prepare: vi.fn((sql: string) => ({
+				bind: (...params: unknown[]) => {
+					statements.push({ sql, params });
+					return {
+						first: async () => {
+							if (sql.includes("openrouter_global_limits")) {
+								return counts.global === undefined ? undefined : { count: counts.global };
+							}
+							if (sql.includes("openrouter_limits")) {
+								return counts.user === undefined ? undefined : { count: counts.user };
+							}
+							return undefined;
+						},
+						run: async () => ({ meta: { changes: 1 } }),
+					};
+				},
+			})),
+		};
+		return { db: db as unknown as D1Database, statements };
+	}
+
+	function post(body: unknown): Request {
+		return new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	}
+
+	it("bumps both counters in one atomic upsert each and admits under the ceilings", async () => {
+		fetchMock.mockResolvedValue(upstreamOk(chatPayload("hello")));
+		const { db, statements } = quotaDb({ user: 60, global: 1_000 });
+		const response = await handleOpenRouterRequest(post({ message: "hi" }), env({ DB: db }));
+		expect(response.status).toBe(200);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const limiterSql = statements.map((s) => s.sql);
+		expect(limiterSql).toHaveLength(2);
+		for (const sql of limiterSql) {
+			expect(sql).toMatch(/INSERT INTO openrouter_(global_)?limits/);
+			expect(sql).toContain("ON CONFLICT");
+			expect(sql).toContain("RETURNING count");
+			expect(sql).toContain("CASE WHEN window_start = excluded.window_start THEN count + 1 ELSE 1 END");
+		}
+		const windowStart = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+		expect(statements[0]?.params).toEqual(["user-1", windowStart]);
+		expect(statements[1]?.params).toEqual([windowStart]);
+	});
+
+	it("returns 429 with Retry-After once the per-user ceiling is crossed and skips the global counter", async () => {
+		const { db, statements } = quotaDb({ user: 61, global: 1 });
+		const response = await handleOpenRouterRequest(post({ message: "hi" }), env({ DB: db }));
+		expect(response.status).toBe(429);
+		const retryAfter = Number(response.headers.get("Retry-After"));
+		expect(retryAfter).toBeGreaterThan(0);
+		expect(retryAfter).toBeLessThanOrEqual(3_600);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(statements.some((s) => s.sql.includes("openrouter_global_limits"))).toBe(false);
+	});
+
+	it("returns 429 once the account-wide ceiling is crossed even for a fresh user", async () => {
+		const { db } = quotaDb({ user: 1, global: 1_001 });
+		const response = await handleOpenRouterRequest(post({ message: "hi" }), env({ DB: db }));
+		expect(response.status).toBe(429);
+		expect(fetchMock).not.toHaveBeenCalled();
+		const body = (await response.json()) as Record<string, unknown>;
+		expect(body).toEqual({ ok: false, error: "Rate limit exceeded, try again later" });
+	});
+
+	it("fails open when the limiter store is unavailable", async () => {
+		fetchMock.mockResolvedValue(upstreamOk(chatPayload("hello")));
+		const db = {
+			prepare: vi.fn(() => ({
+				bind: () => ({
+					first: async () => {
+						throw new Error("D1 down");
+					},
+				}),
+			})),
+		} as unknown as D1Database;
+		const response = await handleOpenRouterRequest(post({ message: "hi" }), env({ DB: db }));
+		expect(response.status).toBe(200);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("upstream failure disclosure", () => {
+	const fetchMock = vi.fn();
+	const consoleError = vi.fn();
+
+	beforeEach(() => {
+		fetchMock.mockReset();
+		consoleError.mockReset();
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "error").mockImplementation(consoleError);
+	});
+
+	function post(body: unknown): Request {
+		return new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	}
+
+	const accountLeak =
+		'{"error":{"message":"Insufficient credits for key sk-or-v1-abc (label: prod)","code":402}}';
+
+	it("logs the upstream error body but never returns it to the client (JSON path)", async () => {
+		fetchMock.mockResolvedValue(new Response(accountLeak, { status: 402 }));
+		const response = await handleOpenRouterRequest(post({ message: "hi" }), env());
+		expect(response.status).toBe(502);
+		const text = await response.text();
+		expect(text).not.toContain("sk-or-v1");
+		expect(text).not.toContain("credits");
+		expect(JSON.parse(text)).toEqual({ ok: false, error: "OpenRouter returned 402" });
+		expect(consoleError).toHaveBeenCalled();
+		expect(JSON.stringify(consoleError.mock.calls)).toContain("Insufficient credits");
+	});
+
+	it("logs the upstream error body but never returns it to the client (stream path)", async () => {
+		fetchMock.mockResolvedValue(new Response(accountLeak, { status: 401 }));
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi", stream: true }),
+			env(),
+		);
+		expect(response.status).toBe(502);
+		const text = await response.text();
+		expect(text).not.toContain("sk-or-v1");
+		expect(JSON.parse(text)).toEqual({ ok: false, error: "OpenRouter returned 401" });
+	});
+
+	it("reports a missing server key generically", async () => {
+		const response = await handleOpenRouterRequest(
+			post({ message: "hi" }),
+			env({ OPENROUTER_API_KEY: "" }),
+		);
+		expect(response.status).toBe(500);
+		const text = await response.text();
+		expect(text).not.toContain("OPENROUTER_API_KEY");
+		expect(text).not.toContain(".dev.vars");
+		expect(JSON.parse(text)).toEqual({ ok: false, error: "Chat is not configured on this server" });
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
