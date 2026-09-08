@@ -398,7 +398,7 @@ export function ChatPane({
 					focused={focused}
 				/>
 			) : (
-				<EmptyState>
+				<EmptyState paneId={pane.id}>
 					{composer ? (
 						<div className="composer-stack">
 							{composer}

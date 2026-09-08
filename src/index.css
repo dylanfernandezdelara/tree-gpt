@@ -584,6 +584,17 @@ button {
 		padding-left: 16px;
 		padding-right: 16px;
 	}
+
+}
+
+/*
+ * Quarter-screen panes and narrower: no room to read a tip, and a 4x4 split
+ * would repeat one per pane. A half-screen pane keeps its blurb.
+ */
+@container (max-width: 480px) {
+	.empty__blurb {
+		display: none;
+	}
 }
 
 /*
@@ -1206,10 +1217,31 @@ details > .thinking__label {
 }
 
 .empty__title {
-	margin: 0 0 24px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	margin: 0 0 8px;
 	font-size: 24px;
 	line-height: 28px;
 	font-weight: 400;
+	text-align: center;
+}
+
+/* Blue like the fork links, so it reads as an affordance, not decoration. */
+.empty__icon {
+	flex-shrink: 0;
+	width: 22px;
+	height: 22px;
+	color: var(--brand);
+}
+
+.empty__blurb {
+	max-width: 42ch;
+	margin: 0 auto 24px;
+	font-size: 14px;
+	line-height: 20px;
+	color: var(--text-secondary);
 	text-align: center;
 }
 
