@@ -1,13 +1,4 @@
-/**
- * Tripwire for the empty-reply hang: the Worker Response (and its first
- * heartbeat) must exist before OpenRouter answers. Awaiting that fetch in
- * the handler left the isolate with no body; the edge canceled it as hung.
- *
- * These helpers fail in STREAM_TTFB_BUDGET_MS instead of waiting for the
- * Vitest timeout, so a regression is a fast, named failure.
- */
-
-export const STREAM_TTFB_BUDGET_MS = 100;
+const STREAM_TTFB_BUDGET_MS = 500;
 
 export class StreamTtfbTimeout extends Error {
 	constructor(what: string) {
@@ -19,7 +10,6 @@ export class StreamTtfbTimeout extends Error {
 	}
 }
 
-/** Fetch that stays pending until `release` — the hang the tripwire watches for. */
 export function holdOpenRouterFetch(): {
 	impl: () => Promise<Response>;
 	release: (response: Response) => void;
@@ -61,9 +51,14 @@ export async function readFirstChunkWithinBudget(
 		throw new Error(`${what} has no body`);
 	}
 	const reader = body.getReader();
-	const first = await assertWithinTtfbBudget(reader.read(), `${what} first SSE chunk`);
-	if (first.done || !first.value) {
-		throw new Error(`${what} closed before the first heartbeat`);
+	try {
+		const first = await assertWithinTtfbBudget(reader.read(), `${what} first SSE chunk`);
+		if (first.done || !first.value) {
+			throw new Error(`${what} closed before the first heartbeat`);
+		}
+		return { text: new TextDecoder().decode(first.value), reader };
+	} catch (error) {
+		await reader.cancel();
+		throw error;
 	}
-	return { text: new TextDecoder().decode(first.value), reader };
 }

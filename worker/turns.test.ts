@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser } from "./auth.js";
 import { makeDb } from "./testing/d1.js";
+import {
+	assertWithinTtfbBudget,
+	holdOpenRouterFetch,
+	readFirstChunkWithinBudget,
+} from "./testing/stream-ttfb.js";
 import { loadPath, summaryFor, type ChatRow, type MessageRow } from "./tree.js";
 import type { ChatSummary } from "./tree-types.js";
 import { PENDING_TIMEOUT_MS } from "./tree-types.js";
@@ -604,6 +609,38 @@ describe("handleTurnRequest", () => {
 		);
 		expect(events.some((event) => event.type === "done" && "model" in event)).toBe(false);
 		expect(JSON.stringify(events)).not.toContain('{"type":"done","model"');
+	});
+
+	it("returns and heartbeats before OpenRouter answers", async () => {
+		const held = holdOpenRouterFetch();
+		fetchMock.mockImplementation(held.impl);
+		const chats: Record<string, ChatRow | undefined> = { "chat-1": sourceChat };
+		const { db } = makeDb({
+			first: firstFor({ chats, messages: { a1: parentLeaf } }),
+			all: async () => ({ results: pathMessages }),
+			batch: async (stmts) => {
+				chats["chat-1"] = { ...sourceChat, leaf_id: "a2" };
+				return stmts.map(() => ({ meta: { changes: 1 } }));
+			},
+		});
+		const { ctx, promises } = makeCtx();
+
+		const response = await assertWithinTtfbBudget(
+			handleTurnRequest(
+				turnRequest("chat-1", { ...appendBody, stream: true }),
+				envWith(db),
+				ctx,
+				"chat-1",
+			),
+			"streaming turn response",
+		);
+		const { text, reader } = await readFirstChunkWithinBudget(response.body, "streaming turn");
+		expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+		expect(text).toContain(":thinking");
+
+		held.release(sseResponse(`data: [DONE]\n\n`));
+		await reader.cancel();
+		await Promise.all(promises);
 	});
 
 	it("abandons and returns 502 JSON when upstream fails before the stream", async () => {
