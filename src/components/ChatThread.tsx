@@ -271,6 +271,7 @@ export function ChatThread({
 					<ForkLinks forks={trailing} onOpen={onOpenFork} />
 				</div>
 			</div>
+			<div className="thread-top-fade" aria-hidden="true" />
 			<div className="thread-fade" aria-hidden="true" />
 			{scrolledUp ? (
 				<button

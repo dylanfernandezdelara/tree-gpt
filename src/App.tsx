@@ -874,6 +874,11 @@ function ChatApp({ user }: { user: AuthUser }) {
 				}
 				onFocus={() => focusPane(pane.id)}
 				onClose={() => closePane(pane.id)}
+				onRename={(next) => {
+					if (pane.chatId) {
+						renameChat(pane.chatId, next);
+					}
+				}}
 				onDraftChange={(value) => setDraft(pane.id, value)}
 				onSend={() => send(pane.id)}
 				onStop={() => stop(pane.id)}

@@ -3,6 +3,7 @@ import {
 	useRef,
 	useState,
 	type DragEvent,
+	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
@@ -62,6 +63,8 @@ type Props = {
 	flashKey: string | null;
 	onFocus: () => void;
 	onClose: () => void;
+	/** Commit a new title for this pane's chat. */
+	onRename: (title: string) => void;
 	onDraftChange: (value: string) => void;
 	onSend: () => void;
 	onStop: () => void;
@@ -98,6 +101,7 @@ export function ChatPane({
 	flashKey,
 	onFocus,
 	onClose,
+	onRename,
 	onDraftChange,
 	onSend,
 	onStop,
@@ -115,7 +119,11 @@ export function ChatPane({
 	const headerDepthRef = useRef(0);
 	const [dropSide, setDropSide] = useState<DropSide | null>(null);
 	const [headerHover, setHeaderHover] = useState(false);
+	const [editingTitle, setEditingTitle] = useState(false);
+	const [titleDraft, setTitleDraft] = useState("");
 	const inputRef = useRef<HTMLTextAreaElement>(null);
+	/** Off-screen stand-in used as the drag image, so a drag shows the name alone. */
+	const chipRef = useRef<HTMLSpanElement>(null);
 
 	// A pane opened for threading should be ready to type in straight away,
 	// including when an existing pane was reused and so never remounted.
@@ -135,8 +143,36 @@ export function ChatPane({
 	 * caret back here would undo it -- the Thread button, for one, hands focus to
 	 * the pane it just opened.
 	 */
+	function startRename() {
+		if (!chat) {
+			return;
+		}
+		setTitleDraft(chat.title);
+		setEditingTitle(true);
+	}
+
+	function commitRename() {
+		const next = titleDraft.trim();
+		if (chat && next && next !== chat.title) {
+			onRename(next);
+		}
+		setEditingTitle(false);
+	}
+
+	function handleTitleKey(event: ReactKeyboardEvent<HTMLInputElement>) {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			commitRename();
+		} else if (event.key === "Escape") {
+			event.preventDefault();
+			setEditingTitle(false);
+		}
+	}
+
 	function handlePaneClick(event: ReactMouseEvent<HTMLElement>) {
-		if ((event.target as HTMLElement).closest("button, a, input, textarea, select")) {
+		if (
+			(event.target as HTMLElement).closest("button, a, input, textarea, select, .pane__title")
+		) {
 			return;
 		}
 		const selection = window.getSelection();
@@ -205,6 +241,10 @@ export function ChatPane({
 	function handleHeaderDragStart(event: DragEvent<HTMLElement>) {
 		const payload: DragPayload = { kind: "pane", paneId: pane.id };
 		writeDragPayload(event.dataTransfer, payload, title);
+		// Without this the browser drags a snapshot of the whole header bar.
+		if (chipRef.current) {
+			event.dataTransfer.setDragImage(chipRef.current, 16, 18);
+		}
 		onDragStart(payload);
 	}
 
@@ -295,7 +335,9 @@ export function ChatPane({
 
 	return (
 		<section
-			className={`pane${focused ? " pane--focused" : ""}`}
+			className={`pane${focused ? " pane--focused" : ""}${
+				showHeader ? " pane--headed" : ""
+			}`}
 			data-pane-id={pane.id}
 			onMouseDownCapture={onFocus}
 			onFocusCapture={onFocus}
@@ -308,7 +350,8 @@ export function ChatPane({
 			{showHeader ? (
 				<div
 					className={headerClass}
-					draggable
+					// Dragging while renaming would hijack text selection in the input.
+					draggable={!editingTitle}
 					onDragStart={handleHeaderDragStart}
 					onDragEnd={onDragEnd}
 					onDragEnter={handleHeaderDragEnter}
@@ -316,9 +359,25 @@ export function ChatPane({
 					onDragLeave={handleHeaderDragLeave}
 					onDrop={handleHeaderDrop}
 				>
-					<span className="pane__title" title={title}>
-						{title}
-					</span>
+					{editingTitle ? (
+						<input
+							className="pane__title-input"
+							value={titleDraft}
+							onChange={(event) => setTitleDraft(event.target.value)}
+							onKeyDown={handleTitleKey}
+							onBlur={commitRename}
+							aria-label="Chat title"
+							autoFocus
+						/>
+					) : (
+						<span
+							className="pane__title"
+							title={chat ? `${title} — double-click to rename` : title}
+							onDoubleClick={startRename}
+						>
+							{title}
+						</span>
+					)}
 					<IconButton
 						label="Close pane"
 						className="pane__close"
@@ -362,6 +421,10 @@ export function ChatPane({
 			{/* Remounted on every new key, which replays the one-shot ring. Only the
 			    focused pane is ever given a key, so the ring always marks focus. */}
 			{flashKey === null ? null : <span key={flashKey} className="pane__flash" aria-hidden="true" />}
+			{/* Rendered off-screen: setDragImage refuses a hidden element. */}
+			<span className="pane__drag-chip" ref={chipRef} aria-hidden="true">
+				{title}
+			</span>
 		</section>
 	);
 }
