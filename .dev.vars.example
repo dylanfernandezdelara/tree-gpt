@@ -2,6 +2,3 @@ OPENROUTER_API_KEY=
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 BETTER_AUTH_SECRET=
-# Optional: pin the canonical origin for Better Auth (production only).
-# Leave unset for local dev. Example: APP_ORIGIN=https://treegpt.<account>.workers.dev
-# APP_ORIGIN=

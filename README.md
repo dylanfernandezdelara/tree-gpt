@@ -13,7 +13,7 @@ npm run db:migrate:local
 npm run dev # http://localhost:5173
 ```
 
-Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). In production set plaintext Worker var `APP_ORIGIN` to the app origin (unset locally).
+Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). Production is `https://forkgpt.app`. Register `<origin>/api/auth/callback/github` on the GitHub OAuth App for each hostname you sign in on.
 
 ## API
 
