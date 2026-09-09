@@ -4,7 +4,7 @@ const DELTA = 8;
 /** Always show chrome when the reader is at the top. */
 const TOP = 16;
 /** Jumps this large are programmatic (open chat, stick-to-bottom), not a swipe. */
-const PROGRAMMATIC = 80;
+const PROGRAMMATIC = 400;
 
 export function isScrollSurface(target: EventTarget | null): target is HTMLElement {
 	return (

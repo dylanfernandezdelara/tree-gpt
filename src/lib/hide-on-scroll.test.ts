@@ -24,6 +24,10 @@ describe("nextChromeHidden", () => {
 		expect(nextChromeHidden({ hidden: false, y: 22, lastY: 20, mobile: true })).toBe(false);
 	});
 
+	it("hides on a real swipe that is larger than jitter", () => {
+		expect(nextChromeHidden({ hidden: false, y: 160, lastY: 40, mobile: true })).toBe(true);
+	});
+
 	it("keeps the current state for a tiny move mid-thread", () => {
 		expect(nextChromeHidden({ hidden: true, y: 120, lastY: 116, mobile: true })).toBe(true);
 	});
