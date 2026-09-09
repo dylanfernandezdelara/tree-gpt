@@ -1,0 +1,17 @@
+{
+	"model": "openai/gpt-5.6-luna",
+	"choices": [
+		{
+			"delta": {
+				"tool_calls": [
+					{
+						"index": 0,
+						"id": "call_luna_1",
+						"type": "function",
+						"function": { "name": "web_search", "arguments": "{\"query\":\"US Open winner today\"}" }
+					}
+				]
+			}
+		}
+	]
+}

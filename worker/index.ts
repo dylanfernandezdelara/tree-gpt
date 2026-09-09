@@ -8,7 +8,7 @@ import { handleTurnRequest } from "./turns.js";
 
 /**
  * Largest body any /api route legitimately needs. The compat PUT of a full
- * chat (80 messages of multi-byte content plus reasoning) stays under 4 MiB;
+ * chat (80 messages of multi-byte content plus reasoning and capped search JSON) stays under 4 MiB;
  * anything bigger is rejected before a handler parses it.
  */
 const MAX_API_BODY_BYTES = 8 * 1024 * 1024;

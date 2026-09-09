@@ -54,6 +54,8 @@ function linearPath(
 		status: "done",
 		content: node.content,
 		reasoning: node.reasoning ?? null,
+		citations: null,
+		tool_calls: null,
 		created_at: node.created_at,
 	}));
 }
@@ -169,8 +171,10 @@ describe("handleChatsRequest", () => {
 		expect(inserts).toHaveLength(2);
 		// user_id, root_id, parent_id, depth, role, content, reasoning, created_at
 		expect(inserts[0]?.params[7]).toBe(null);
-		expect(inserts[1]?.params).toHaveLength(10);
+		expect(inserts[1]?.params).toHaveLength(12);
 		expect(inserts[1]?.params[7]).toBe("Considering the question.");
+		expect(inserts[1]?.params[8]).toBe(null);
+		expect(inserts[1]?.params[9]).toBe(null);
 	});
 
 	it("PUT truncates overlong traces instead of rejecting the chat", async () => {
@@ -190,6 +194,63 @@ describe("handleChatsRequest", () => {
 		expect(body.chat.messages[0]?.reasoning).toHaveLength(4000);
 		const insert = batch.find((s) => s.sql.includes("INSERT INTO messages"));
 		expect(insert?.params[7]).toHaveLength(4000);
+	});
+
+	it("PUT stores sanitized search metadata and omits those columns when keys are absent", async () => {
+		const { response, batch } = await putRequest([
+			{ id: "m1", role: "user", content: "who won", createdAt: 1 },
+			{
+				id: "m2",
+				role: "assistant",
+				content: "Alcaraz",
+				createdAt: 2,
+				citations: [
+					{
+						url: "https://www.example.com/us-open",
+						title: "US Open",
+						content: "drop",
+					},
+					{ url: "http://bad.example" },
+				],
+				toolCalls: [{ id: "web_search", name: "web_search", state: "output-available" }],
+			},
+		]);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as { chat: { messages: Record<string, unknown>[] } };
+		expect(body.chat.messages[1]).toMatchObject({
+			citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
+			toolCalls: [{ id: "web_search", name: "web_search", state: "output-available" }],
+		});
+		const insert = batch.filter((s) => s.sql.includes("INSERT INTO messages"))[1];
+		expect(insert?.params[8]).toBe(
+			JSON.stringify([{ url: "https://www.example.com/us-open", title: "US Open" }]),
+		);
+		expect(insert?.params[9]).toBe(
+			JSON.stringify([{ id: "web_search", name: "web_search", state: "output-available" }]),
+		);
+
+		const path = linearPath([
+			{ id: "m1", role: "user", content: "who won", created_at: 1 },
+			{ id: "m2", role: "assistant", content: "Alcaraz", created_at: 2 },
+		]);
+		path[1] = {
+			...path[1]!,
+			citations: JSON.stringify([{ url: "https://www.example.com/keep", title: "Keep" }]),
+			tool_calls: JSON.stringify([{ id: "web_search", name: "web_search", state: "output-available" }]),
+		};
+		const edited = await putRequest(
+			[
+				{ id: "m1", role: "user", content: "who won", createdAt: 1 },
+				{ id: "m2", role: "assistant", content: "Alcaraz won", createdAt: 2 },
+			],
+			{ chat: existingChat(path), path },
+		);
+		expect(edited.response.status).toBe(200);
+		const update = edited.batch.find((s) => s.sql.includes("UPDATE messages SET"));
+		expect(update?.sql).toContain("content = ?");
+		expect(update?.sql).toContain("reasoning = ?");
+		expect(update?.sql.includes("citations")).toBe(false);
+		expect(update?.sql.includes("tool_calls")).toBe(false);
 	});
 
 	it("GET delegates to loadAllPaths and returns its result unchanged under chats", async () => {
@@ -344,8 +405,8 @@ describe("PUT reconcile", () => {
 		expect(batch[0]?.sql).toContain("NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)");
 		expect(batch[1]?.sql).toContain("NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)");
 		expect(batch[2]?.sql).toContain("NOT EXISTS (SELECT 1 FROM chats WHERE id = ?)");
-		expect(batch[0]?.params).toEqual(["m1", USER_ID, "m1", null, 0, "user", "hi", null, 1, CHAT_ID]);
-		expect(batch[1]?.params).toEqual(["m2", USER_ID, "m1", "m1", 1, "assistant", "hello", null, 2, CHAT_ID]);
+		expect(batch[0]?.params).toEqual(["m1", USER_ID, "m1", null, 0, "user", "hi", null, null, null, 1, CHAT_ID]);
+		expect(batch[1]?.params).toEqual(["m2", USER_ID, "m1", "m1", 1, "assistant", "hello", null, null, null, 2, CHAT_ID]);
 		expect(batch[2]?.params).toEqual([CHAT_ID, USER_ID, "m1", "m2", "Test chat", 1, 2, CHAT_ID]);
 		expect(batch.some((s) => s.sql.includes("DELETE"))).toBe(false);
 	});
@@ -368,8 +429,8 @@ describe("PUT reconcile", () => {
 		const inserts = batch.filter((s) => s.sql.includes("INSERT INTO messages"));
 		const updates = batch.filter((s) => s.sql.includes("UPDATE chats"));
 		expect(inserts).toHaveLength(2);
-		expect(inserts[0]?.params).toEqual(["m3", USER_ID, "m1", "m2", 2, "user", "c", null, 3, CHAT_ID, USER_ID, "m2"]);
-		expect(inserts[1]?.params).toEqual(["m4", USER_ID, "m1", "m3", 3, "assistant", "d", null, 4, CHAT_ID, USER_ID, "m2"]);
+		expect(inserts[0]?.params).toEqual(["m3", USER_ID, "m1", "m2", 2, "user", "c", null, null, null, 3, CHAT_ID, USER_ID, "m2"]);
+		expect(inserts[1]?.params).toEqual(["m4", USER_ID, "m1", "m3", 3, "assistant", "d", null, null, null, 4, CHAT_ID, USER_ID, "m2"]);
 		expect(updates).toHaveLength(1);
 		expect(updates[0]?.params).toEqual(["m4", "m1", "Test chat", 1, 2, CHAT_ID, USER_ID, "m2"]);
 		expect(batch.some((s) => s.sql.includes("DELETE"))).toBe(false);
@@ -432,8 +493,8 @@ describe("PUT reconcile", () => {
 		expect(response.status).toBe(200);
 		const inserts = batch.filter((s) => s.sql.includes("INSERT INTO messages"));
 		expect(inserts).toHaveLength(2);
-		expect(inserts[0]?.params).toEqual(["m5", USER_ID, "m1", "m2", 2, "user", "e", null, 5, CHAT_ID, USER_ID, "m4"]);
-		expect(inserts[1]?.params).toEqual(["m6", USER_ID, "m1", "m5", 3, "assistant", "f", null, 6, CHAT_ID, USER_ID, "m4"]);
+		expect(inserts[0]?.params).toEqual(["m5", USER_ID, "m1", "m2", 2, "user", "e", null, null, null, 5, CHAT_ID, USER_ID, "m4"]);
+		expect(inserts[1]?.params).toEqual(["m6", USER_ID, "m1", "m5", 3, "assistant", "f", null, null, null, 6, CHAT_ID, USER_ID, "m4"]);
 		const pointer = batch.find((s) => s.sql.includes("UPDATE chats"));
 		expect(pointer?.params[0]).toBe("m6");
 		expect(pointer?.params[1]).toBe("m1");

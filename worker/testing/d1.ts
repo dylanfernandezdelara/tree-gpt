@@ -70,6 +70,8 @@ export function messageRow(overrides: Partial<MessageRow> = {}): MessageRow {
 		status: "done",
 		content: "hi",
 		reasoning: null,
+		citations: null,
+		tool_calls: null,
 		created_at: 1,
 		...overrides,
 	};

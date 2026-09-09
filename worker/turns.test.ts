@@ -92,6 +92,8 @@ const parentLeaf: MessageRow = {
 	status: "done",
 	content: "prior",
 	reasoning: "display-only, must not go upstream",
+	citations: null,
+	tool_calls: null,
 	created_at: 1,
 };
 
@@ -105,6 +107,8 @@ const userParent: MessageRow = {
 	status: "done",
 	content: "first",
 	reasoning: null,
+	citations: null,
+	tool_calls: null,
 	created_at: 1,
 };
 
@@ -874,6 +878,8 @@ describe("handleTurnRequest", () => {
 			status: "done",
 			content: "hello",
 			reasoning: null,
+			citations: null,
+			tool_calls: null,
 			created_at: 2,
 		};
 		const { db, statements } = makeDb({

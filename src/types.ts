@@ -1,4 +1,7 @@
+import type { Citation, ToolCall } from "../worker/tree-types";
+
 export type Role = "user" | "assistant";
+export type { Citation, ToolCall };
 
 export type Message = {
 	id: string;
@@ -10,6 +13,10 @@ export type Message = {
 	 * Assistant-only; absent on older messages.
 	 */
 	reasoning?: string;
+	/** Display-only search sources; never sent upstream. */
+	citations?: Citation[];
+	/** Display-only web_search chips; never sent upstream. */
+	toolCalls?: ToolCall[];
 	/** Assistant reply that has not arrived yet. */
 	pending?: boolean;
 	/** The request for this reply failed; `content` holds the error text. */

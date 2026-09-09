@@ -74,6 +74,26 @@ describe("sendChatStream", () => {
 		expect(sent.stream).toBe(true);
 	});
 
+	it("reads citations and toolCalls from the done frame", async () => {
+		fetchMock.mockResolvedValue(
+			sseResponse(
+				`data: {"type":"content","text":"Alcaraz won."}\n\n` +
+					`data: {"type":"done","model":"meta/muse-spark-1.3-contributor","citations":[{"url":"https://www.example.com/us-open","title":"US Open","content":"drop"}],"toolCalls":[{"id":"web_search","name":"web_search","state":"output-available"}]}\n\n`,
+			),
+		);
+		const result = await sendChatStream(
+			[{ role: "user", content: "who won" }],
+			new AbortController().signal,
+			() => {},
+		);
+		expect(result).toEqual({
+			ok: true,
+			model: "meta/muse-spark-1.3-contributor",
+			citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
+			toolCalls: [{ id: "web_search", name: "web_search", state: "output-available" }],
+		});
+	});
+
 	it("sends the selected model with the request", async () => {
 		fetchMock.mockResolvedValue(
 			sseResponse(`data: {"type":"done","model":"openai/gpt-5.6-luna"}\n\n`),
