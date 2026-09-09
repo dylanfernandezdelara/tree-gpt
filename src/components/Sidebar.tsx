@@ -99,7 +99,7 @@ export function Sidebar({
 					<Button
 						variant="secondary"
 						size="icon-lg"
-						className="header-btn header-btn--sidebar"
+						className="rounded-full shadow-sm max-[768px]:size-12"
 						aria-label="Close sidebar"
 						title="Close sidebar"
 						onClick={onToggle}

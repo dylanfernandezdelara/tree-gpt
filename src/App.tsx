@@ -963,7 +963,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 						<Button
 							variant="secondary"
 							size="icon-lg"
-							className="header-btn header-btn--sidebar"
+							className="rounded-full shadow-sm max-[768px]:size-12"
 							aria-label="Open sidebar"
 							title="Open sidebar"
 							onClick={() => setSidebarOpen(true)}
@@ -973,7 +973,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 						<Button
 							variant="secondary"
 							size="icon-lg"
-							className="header-btn header-btn--compose"
+							className="rounded-[14px] shadow-sm max-[768px]:size-12 max-[768px]:order-2"
 							aria-label="New chat"
 							title="New chat"
 							onClick={newChat}
