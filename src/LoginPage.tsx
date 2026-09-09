@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 import { ForkMarkGrid } from "@/components/ForkMarkGrid";
+import { ForkMarkScatter } from "@/components/ForkMarkScatter";
 import { TreeIcon } from "@/components/Icons";
 import { SocialLoginButton } from "@/components/SocialLoginButton";
 import { authClient } from "./auth-client";
@@ -23,31 +24,31 @@ export function LoginPending() {
 	);
 }
 
+// Below lg: marks scattered around the page edges, the logo pinned top-left
+// out of the flow, and the form at the exact center of the viewport. From lg:
+// the two-column layout with the logo in flow and the tiled grid on the right.
 function LoginChrome({ children }: { children: ReactNode }) {
 	return (
-		// Phones: a short mark-grid hero on top with the logo over it, then the
-		// form. Desktop: logo + form in the left column, the tall grid on the
-		// right. One grid, one logo; only the cell placement changes.
-		<div className="grid min-h-full grid-cols-1 grid-rows-[9rem_minmax(0,1fr)] lg:grid-cols-2 lg:grid-rows-[auto_minmax(0,1fr)]">
-			<div className="relative col-start-1 row-start-1 min-h-0 overflow-hidden lg:col-start-2 lg:row-span-2 lg:row-start-1">
-				<div className="lg:hidden">
-					<ForkMarkGrid variant="strip" />
+		<div className="relative grid min-h-full lg:grid-cols-2">
+			<div className="pointer-events-none absolute inset-0 overflow-hidden lg:hidden">
+				<ForkMarkScatter />
+			</div>
+			<div className="relative flex min-h-0 flex-col p-6 md:p-10 lg:gap-4">
+				<div className="absolute top-6 left-6 md:top-10 md:left-10 lg:static lg:flex">
+					<a
+						href="/"
+						className="flex items-center gap-2 rounded-md text-base font-semibold tracking-tight text-foreground outline-none focus-visible:ring-2 focus-visible:ring-[#3a83f7] focus-visible:ring-offset-2"
+					>
+						<TreeIcon size={22} className="text-[#3a83f7]" />
+						Fork
+					</a>
 				</div>
-				<div className="hidden lg:block">
-					<ForkMarkGrid variant="cover" />
+				<div className="flex flex-1 items-center justify-center">
+					<div className="w-full max-w-xs">{children}</div>
 				</div>
 			</div>
-			<div className="z-10 col-start-1 row-start-1 flex items-center justify-center self-stretch lg:items-start lg:justify-start lg:self-start lg:p-10 lg:pb-4">
-				<a
-					href="/"
-					className="flex items-center gap-2 rounded-full bg-[#0c1626] px-4 py-2 text-base font-semibold tracking-tight text-white ring-1 ring-white/15 outline-none focus-visible:ring-2 focus-visible:ring-[#3a83f7] lg:rounded-md lg:bg-transparent lg:px-0 lg:py-0 lg:text-foreground lg:ring-0 lg:focus-visible:ring-2 lg:focus-visible:ring-offset-2"
-				>
-					<TreeIcon size={22} className="text-[#3a83f7]" />
-					Fork
-				</a>
-			</div>
-			<div className="col-start-1 row-start-2 flex min-h-0 items-center justify-center px-6 pt-6 pb-[12svh] md:px-10 md:pt-10 lg:pt-0 lg:pb-10">
-				<div className="w-full max-w-xs">{children}</div>
+			<div className="relative hidden lg:block">
+				<ForkMarkGrid />
 			</div>
 		</div>
 	);
