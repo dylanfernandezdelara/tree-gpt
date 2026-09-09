@@ -5,6 +5,7 @@ import { ForkMarkScatter } from "@/components/ForkMarkScatter";
 import { TreeIcon } from "@/components/Icons";
 import { SocialLoginButton } from "@/components/SocialLoginButton";
 import { authClient } from "./auth-client";
+import { clearSessionHint, markOAuthRedirect } from "./lib/session-hint";
 
 type LoginProvider = "github" | "google";
 
@@ -63,15 +64,18 @@ function LoginForm() {
 	async function signIn(provider: LoginProvider) {
 		setError(null);
 		setBusy(provider);
+		markOAuthRedirect();
 		try {
 			const { error: nextError } = await authClient.signIn.social({
 				provider,
 				callbackURL: "/",
 			});
 			if (nextError) {
+				clearSessionHint();
 				setError(nextError.message ?? `${provider} sign-in failed`);
 			}
 		} catch {
+			clearSessionHint();
 			setError(`${provider} sign-in failed`);
 		} finally {
 			setBusy(null);

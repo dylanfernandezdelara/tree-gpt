@@ -9,6 +9,12 @@ import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
 import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
+import {
+	clearSessionHint,
+	hasSessionHint,
+	showSessionPending,
+	syncSessionHint,
+} from "./lib/session-hint";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
 import { BookmarksView } from "./components/BookmarksView";
 import {
@@ -116,8 +122,17 @@ function App() {
 	const session = authClient.useSession();
 	const user = sessionUser(session.data);
 
-	if (!user) {
+	useEffect(() => {
 		if (session.isPending) {
+			return;
+		}
+		syncSessionHint(user !== null);
+	}, [session.isPending, user]);
+
+	if (!user) {
+		// HttpOnly session cookie: first paint cannot know signed-in vs out.
+		// Only block on get-session when a previous visit said a cookie exists.
+		if (showSessionPending(session.isPending, hasSessionHint())) {
 			return <LoginPending />;
 		}
 		return <LoginPage />;
@@ -845,6 +860,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	async function logOut() {
+		clearSessionHint();
 		try {
 			await authClient.signOut();
 		} catch {
