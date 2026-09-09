@@ -1,15 +1,21 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { GlobeIcon, LightbulbIcon, SearchIcon } from "lucide-react";
+import { ThinkingOrb } from "thinking-orbs";
 import type { Citation, Message, ToolCall } from "../types";
-import { Source, Sources, SourcesContent, SourcesTrigger } from "./ai-elements/sources";
-import { Tool, ToolContent, ToolHeader, ToolInput } from "./ai-elements/tool";
 import { IconButton } from "./IconButton";
 import {
 	CheckIcon,
 	CopyIcon,
 	RegenerateIcon,
 } from "./Icons";
+import {
+	ChainOfThought,
+	ChainOfThoughtContent,
+	ChainOfThoughtHeader,
+	ChainOfThoughtStep,
+} from "./ai-elements/chain-of-thought";
 
 type Props = {
 	message: Message;
@@ -27,25 +33,6 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 		);
 	}
 
-	if (message.pending) {
-		return (
-			<div className="turn turn--assistant" aria-busy="true" aria-live="polite">
-				<div className="thinking">
-					<span className="thinking-dot" />
-					<span className="thinking__label">Thinking…</span>
-					{message.reasoning ? (
-						<p className="thinking__text">{message.reasoning}</p>
-					) : null}
-				</div>
-				{message.content ? (
-					<div className="markdown">
-						<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
-					</div>
-				) : null}
-			</div>
-		);
-	}
-
 	if (message.error) {
 		return (
 			<div className="turn turn--assistant">
@@ -59,61 +46,156 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 		);
 	}
 
+	if (message.pending) {
+		return (
+			<div className="turn turn--assistant" aria-busy="true" aria-live="polite">
+				<Thinking message={message} />
+				{message.content ? (
+					<div className="markdown markdown--live">
+						<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+					</div>
+				) : null}
+			</div>
+		);
+	}
+
 	return (
 		<div className="turn turn--assistant" data-message-id={message.id}>
-			{message.reasoning ? (
-				<details className="thinking">
-					<summary className="thinking__label">Thought</summary>
-					<p className="thinking__text">{message.reasoning}</p>
-				</details>
-			) : null}
-			<SearchTools toolCalls={message.toolCalls} />
+			<Thinking message={message} />
 			<div className="markdown">
 				<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
 			</div>
-			<SearchSources citations={message.citations} />
 			<AssistantActions content={message.content} isLast={isLast} onRedo={onRedo} />
 		</div>
 	);
 }
 
-function SearchTools({ toolCalls }: { toolCalls: ToolCall[] | undefined }) {
-	if (!toolCalls || toolCalls.length === 0) {
+/** Roomier line-height so wrapped step labels read as prose, not a cramped chip. */
+const stepClass = "leading-6";
+
+/**
+ * Thinking + search trace for one assistant turn, live or landed, as one
+ * linear rail: reasoning paragraphs, then each search query, then each
+ * visited URL. The header (with the orb while live) is the only status word;
+ * steps are real activity only. Open while streaming, collapsed to a single
+ * "Thought" row once the reply lands.
+ */
+function Thinking({ message }: { message: Message }) {
+	const pending = message.pending === true;
+	const toolCalls = message.toolCalls ?? [];
+	const citations = message.citations ?? [];
+	const paragraphs = reasoningParagraphs(message.reasoning);
+	const searching = toolCalls.some((call) => call.state === "input-available");
+
+	if (!pending && toolCalls.length === 0 && citations.length === 0 && paragraphs.length === 0) {
 		return null;
 	}
+
+	const header = pending ? (searching ? "Searching" : "Thinking") : "Thought";
+	// Live turns always get the searching orb; a landed "Thought" keeps the brain icon.
+	const icon = pending ? (
+		<ThinkingOrb state="searching" size={20} theme="light" className="shrink-0" />
+	) : undefined;
+
 	return (
-		<div className="search-tools">
-			{toolCalls.map((call) => (
-				<Tool key={call.id} className="search-tool" defaultOpen={Boolean(call.query)}>
-					<ToolHeader type="tool-web_search" state={call.state} title="Web search" />
-					{call.query ? (
-						<ToolContent>
-							<ToolInput input={{ query: call.query }} />
-						</ToolContent>
-					) : null}
-				</Tool>
-			))}
-		</div>
+		<ChainOfThought className="mb-3" defaultOpen={pending}>
+			<ChainOfThoughtHeader icon={icon}>{header}</ChainOfThoughtHeader>
+			<ChainOfThoughtContent className="space-y-3">
+				{paragraphs.map((paragraph, index) => (
+					<ChainOfThoughtStep
+						key={`reasoning-${index}`}
+						icon={LightbulbIcon}
+						status={pending && !message.content ? "active" : "complete"}
+						className={stepClass}
+						label={<span className="[overflow-wrap:anywhere]">{paragraph}</span>}
+					/>
+				))}
+				{toolCalls.map((call) => (
+					<ChainOfThoughtStep
+						key={call.id}
+						icon={SearchIcon}
+						status={searchStatus(call)}
+						className={stepClass}
+						label={searchLabel(call)}
+					/>
+				))}
+				{citations.map((citation) => (
+					<ChainOfThoughtStep
+						key={citation.url}
+						icon={GlobeIcon}
+						status={pending ? "active" : "complete"}
+						className={stepClass}
+						label={<CitationLink citation={citation} />}
+					/>
+				))}
+			</ChainOfThoughtContent>
+		</ChainOfThought>
 	);
 }
 
-function SearchSources({ citations }: { citations: Citation[] | undefined }) {
-	if (!citations || citations.length === 0) {
-		return null;
+/** Split display reasoning on blank lines / newlines into one step per paragraph. */
+function reasoningParagraphs(reasoning: string | undefined): string[] {
+	if (!reasoning) {
+		return [];
 	}
+	return reasoning
+		.split(/\n+/)
+		.map((paragraph) => paragraph.trim())
+		.filter((paragraph) => paragraph.length > 0);
+}
+
+function searchStatus(call: ToolCall): "active" | "complete" | "pending" {
+	switch (call.state) {
+		case "input-available":
+			return "active";
+		case "output-available":
+			return "complete";
+		case "output-error":
+			return "pending";
+		default: {
+			const exhaustive: never = call.state;
+			return exhaustive;
+		}
+	}
+}
+
+/** The query itself when we have one; otherwise a short state word. */
+function searchLabel(call: ToolCall): string {
+	if (call.query) {
+		return call.state === "output-error" ? `Search failed: ${call.query}` : call.query;
+	}
+	switch (call.state) {
+		case "input-available":
+			return "Searching the web";
+		case "output-available":
+			return "Searched the web";
+		case "output-error":
+			return "Search failed";
+		default: {
+			const exhaustive: never = call.state;
+			return exhaustive;
+		}
+	}
+}
+
+function hostname(url: string): string {
+	try {
+		return new URL(url).hostname.replace(/^www\./, "");
+	} catch {
+		return url;
+	}
+}
+
+function CitationLink({ citation }: { citation: Citation }) {
 	return (
-		<Sources className="search-sources">
-			<SourcesTrigger count={citations.length} />
-			<SourcesContent>
-				{citations.map((citation) => (
-					<Source
-						key={citation.url}
-						href={citation.url}
-						title={citation.title ?? citation.url}
-					/>
-				))}
-			</SourcesContent>
-		</Sources>
+		<a
+			href={citation.url}
+			target="_blank"
+			rel="noopener noreferrer"
+			className="text-muted-foreground underline-offset-4 [overflow-wrap:anywhere] hover:text-foreground hover:underline"
+		>
+			{citation.title ?? hostname(citation.url)}
+		</a>
 	);
 }
 

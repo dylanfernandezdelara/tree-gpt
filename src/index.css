@@ -824,88 +824,6 @@ button {
 	color: var(--text-secondary);
 }
 
-.thinking {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px;
-	margin-bottom: 8px;
-	color: var(--text-secondary);
-	font-size: 13px;
-	line-height: 18px;
-}
-
-details.thinking {
-	display: block;
-}
-
-.thinking-dot {
-	display: block;
-	width: 12px;
-	height: 12px;
-	border-radius: 50%;
-	background: var(--text-primary);
-	animation: thinking 1.2s ease-in-out infinite;
-}
-
-details .thinking-dot {
-	display: none;
-}
-
-.thinking__label {
-	font-weight: 600;
-}
-
-details > .thinking__label {
-	cursor: pointer;
-}
-
-.thinking__text {
-	flex-basis: 100%;
-	margin: 0;
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-
-.search-tools {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	margin: 0 0 12px;
-}
-
-.search-tool {
-	margin-bottom: 0;
-	border-color: var(--border-medium);
-	background: var(--surface-sidebar);
-	color: var(--text-primary);
-}
-
-.search-sources {
-	margin: 12px 0 0;
-	color: var(--text-secondary);
-}
-
-.search-sources a {
-	color: var(--text-secondary);
-}
-
-.search-sources a:hover {
-	color: var(--text-primary);
-}
-
-@keyframes thinking {
-	0%,
-	100% {
-		transform: scale(1);
-		opacity: 1;
-	}
-	50% {
-		transform: scale(0.7);
-		opacity: 0.5;
-	}
-}
-
 .error-box {
 	display: flex;
 	align-items: center;
@@ -935,6 +853,85 @@ details > .thinking__label {
 
 .error-box__retry:hover {
 	background: #f9f9f9;
+}
+
+/* ---------- Soft arrivals (chain of thought, sources, live reply) ---------- */
+
+/*
+ * New steps and source chips dissolve in once and then hold still: a longer
+ * opacity ease with a touch of blur, no slide, no spring.
+ */
+@keyframes cot-enter {
+	from {
+		opacity: 0;
+		filter: blur(3px);
+	}
+
+	to {
+		opacity: 1;
+		filter: blur(0);
+	}
+}
+
+.cot-enter {
+	animation: cot-enter 360ms ease-out both;
+}
+
+/*
+ * While a reply streams, its tail fades slightly and a soft highlight sweeps
+ * the last line, so new text reads as dissolving in instead of popping. The
+ * tree is never remounted; only this class comes and goes.
+ */
+@keyframes markdown-shimmer {
+	from {
+		background-position: -60% 0;
+	}
+
+	to {
+		background-position: 160% 0;
+	}
+}
+
+.markdown--live {
+	position: relative;
+	mask-image: linear-gradient(
+		to bottom,
+		#000 calc(100% - 1.6em),
+		rgba(0, 0, 0, 0.55) 100%
+	);
+}
+
+.markdown--live::after {
+	content: "";
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	height: 1.8em;
+	pointer-events: none;
+	background: linear-gradient(
+		90deg,
+		rgba(255, 255, 255, 0) 0%,
+		rgba(255, 255, 255, 0.75) 50%,
+		rgba(255, 255, 255, 0) 100%
+	);
+	background-size: 45% 100%;
+	background-repeat: no-repeat;
+	animation: markdown-shimmer 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cot-enter {
+		animation: none;
+	}
+
+	.markdown--live {
+		mask-image: none;
+	}
+
+	.markdown--live::after {
+		display: none;
+	}
 }
 
 /* ---------- Markdown (assistant replies) ---------- */
@@ -1168,17 +1165,25 @@ details > .thinking__label {
 
 /* ---------- Composer ---------- */
 
+/*
+ * BorderBeam wrapper. It clips to the pill radius (overflow: hidden), which
+ * would swallow the composer's own shadow, so the shadow lives here instead.
+ */
+.composer-beam {
+	max-width: var(--thread-width);
+	margin: 0 auto;
+	border-radius: 28px;
+	box-shadow: var(--composer-shadow);
+}
+
 .composer {
 	display: flex;
 	align-items: flex-end;
 	gap: 8px;
-	max-width: var(--thread-width);
 	min-height: 52px;
-	margin: 0 auto;
 	padding: 8px 8px 8px 20px;
 	border-radius: 28px;
 	background: #fff;
-	box-shadow: var(--composer-shadow);
 	cursor: text;
 }
 
