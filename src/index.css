@@ -1611,6 +1611,24 @@ button {
 	background: var(--surface-hover);
 }
 
+/*
+ * The unlayered `button` reset above outranks Tailwind's layered utilities, so
+ * the login provider buttons draw their outline here.
+ */
+.login-provider {
+	border: 1px solid #a1a1aa;
+	background: #fff;
+}
+
+.login-provider:enabled:hover {
+	border-color: #0d0d0d;
+	background: #fafafa;
+}
+
+.login-provider:disabled {
+	border-color: #d4d4d8;
+}
+
 /* ---------- Auth dialog ---------- */
 
 .auth-backdrop {
