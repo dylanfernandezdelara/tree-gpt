@@ -20,6 +20,7 @@ import {
 	searchMetaFromPayload,
 } from "./search-meta.js";
 import { systemPrompt } from "./system-prompt.js";
+import { unsquashSentences } from "./unsquash-sentences.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -480,6 +481,7 @@ function translateStream(
 	let finished = false;
 	const searchAcc = createSearchAccumulator();
 	let lastSearchFingerprint = "";
+	let emittedContent = "";
 
 	return new ReadableStream<UpstreamEvent>({
 		// Pump from start(), not pull(): resolving pulls without enqueueing
@@ -619,7 +621,10 @@ function translateStream(
 				}
 			}
 			if (delta.content) {
-				events.push({ type: "content", text: delta.content });
+				const assembled = unsquashSentences(emittedContent + delta.content);
+				const text = assembled.slice(emittedContent.length);
+				emittedContent = assembled;
+				events.push({ type: "content", text });
 			}
 		}
 		return events;
@@ -639,8 +644,11 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 		return null;
 	}
 	const out: { content?: string; reasoning?: string } = {};
-	if ("content" in delta && typeof delta.content === "string" && delta.content) {
-		out.content = delta.content;
+	if ("content" in delta) {
+		const content = messageText(delta.content);
+		if (content) {
+			out.content = content;
+		}
 	}
 	const texts: string[] = [];
 	if ("reasoning" in delta && typeof delta.reasoning === "string" && delta.reasoning) {
@@ -804,10 +812,11 @@ function parseCompletion(payload: unknown): ParsedUpstream | null {
 		return null;
 	}
 
-	const content = "content" in message ? messageText(message.content) : null;
-	if (content === null) {
+	const raw = "content" in message ? messageText(message.content) : null;
+	if (raw === null) {
 		return null;
 	}
+	const content = unsquashSentences(raw);
 
 	const finishReason =
 		"finish_reason" in first && typeof first.finish_reason === "string"
@@ -839,10 +848,7 @@ function toOpenRouterMessages(
 	];
 }
 
-/**
- * Muse Spark returns content: null when reasoning consumes the token budget.
- * Some models also return content as an array of text parts.
- */
+/** OpenRouter `content`: string, null while reasoning, or text / output_text parts. */
 function messageText(content: unknown): string | null {
 	if (typeof content === "string") {
 		return content;

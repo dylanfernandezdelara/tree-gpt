@@ -161,6 +161,26 @@ describe("requestCompletion", () => {
 		expect(JSON.stringify(body).includes("x".repeat(100))).toBe(false);
 	});
 
+	it("unsquashes smashed sentences in a complete non-stream reply", async () => {
+		fetchMock.mockResolvedValue(
+			upstreamOk(
+				chatPayload([
+					{ type: "text", text: "I'll pull up the latest projections for tomorrow's games." },
+					{ type: "text", text: "Tomorrow's opener is set." },
+				]),
+			),
+		);
+		const result = await requestCompletion(env(), [{ role: "user", content: "projections" }]);
+		expect(result).toEqual({
+			ok: true,
+			value: {
+				model: expect.any(String),
+				content:
+					"I'll pull up the latest projections for tomorrow's games. Tomorrow's opener is set.",
+			},
+		});
+	});
+
 	it("drops reasoning_details returned upstream instead of storing them", async () => {
 		fetchMock.mockResolvedValue(
 			upstreamOk(
@@ -295,6 +315,31 @@ describe("handleOpenRouterRequest", () => {
 			{ type: "content", text: " there" },
 			{ type: "done", model: "meta/muse-spark-1.3-contributor" },
 		]);
+	});
+
+	it("reads array content parts on the stream, including a space-only frame", async () => {
+		const frames = [
+			`data: {"choices":[{"delta":{"content":[{"type":"text","text":"Hello"}]}}]}\n\n`,
+			`data: {"choices":[{"delta":{"content":[{"type":"text","text":" "}]}}]}\n\n`,
+			`data: {"choices":[{"delta":{"content":[{"type":"output_text","text":"there.Next"}]}}]}\n\n`,
+			`data: [DONE]\n\n`,
+		];
+		fetchMock.mockResolvedValue(new Response(frames.join(""), { status: 200 }));
+		const request = new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ message: "hi", stream: true }),
+		});
+
+		const response = await handleOpenRouterRequest(request, env());
+		const content = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>)
+			.filter((event) => event.type === "content")
+			.map((event) => String(event.text))
+			.join("");
+		expect(content).toBe("Hello there. Next");
 	});
 
 	it("keeps streaming when OpenRouter emits tool_calls deltas", async () => {
