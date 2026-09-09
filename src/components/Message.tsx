@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { GlobeIcon, LightbulbIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
@@ -16,6 +17,10 @@ import {
 	ChainOfThoughtHeader,
 	ChainOfThoughtStep,
 } from "./ai-elements/chain-of-thought";
+
+/** GFM plus hard breaks: Muse writes `**Title**\\nBody` and CommonMark would
+ *  otherwise collapse that single newline into a space ("tangent Fork"). */
+const remarkPlugins = [remarkGfm, remarkBreaks];
 
 type Props = {
 	message: Message;
@@ -52,7 +57,7 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 				<Thinking message={message} />
 				{message.content ? (
 					<div className="markdown markdown--live">
-						<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+						<Markdown remarkPlugins={remarkPlugins}>{message.content}</Markdown>
 					</div>
 				) : null}
 			</div>
@@ -63,7 +68,7 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 		<div className="turn turn--assistant" data-message-id={message.id}>
 			<Thinking message={message} />
 			<div className="markdown">
-				<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+				<Markdown remarkPlugins={remarkPlugins}>{message.content}</Markdown>
 			</div>
 			<AssistantActions content={message.content} isLast={isLast} onRedo={onRedo} />
 		</div>
