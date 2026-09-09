@@ -1,5 +1,21 @@
 import { betterAuth } from "better-auth";
 
+function optionalSecret(env: Env, key: string): string | undefined {
+	const value = (env as unknown as Record<string, unknown>)[key];
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export function googleProvider(env: Env) {
+	const clientId = optionalSecret(env, "GOOGLE_CLIENT_ID");
+	const clientSecret = optionalSecret(env, "GOOGLE_CLIENT_SECRET");
+	if (!clientId || !clientSecret) {
+		return {};
+	}
+	return {
+		google: { clientId, clientSecret },
+	};
+}
+
 export function createAuth(env: Env, request: Request) {
 	const origin = new URL(request.url).origin;
 
@@ -19,6 +35,7 @@ export function createAuth(env: Env, request: Request) {
 				disableDefaultScope: true,
 				scope: ["user:email"],
 			},
+			...googleProvider(env),
 		},
 		databaseHooks: {
 			user: {

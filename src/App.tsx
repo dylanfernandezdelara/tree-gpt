@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LoginPage } from "./LoginPage";
+import { LoginPage, LoginPending } from "./LoginPage";
 import { ChatPane } from "./components/ChatPane";
 import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
@@ -118,11 +118,7 @@ function App() {
 
 	if (!user) {
 		if (session.isPending) {
-			return (
-				<div className="login-page">
-					<p className="login-page__status">Checking session…</p>
-				</div>
-			);
+			return <LoginPending />;
 		}
 		return <LoginPage />;
 	}
