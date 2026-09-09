@@ -1,4 +1,7 @@
+import { useEffect } from "react";
+
 import { authClient } from "../auth-client";
+import { beginSignOut, cancelSignOut, hasSessionHint, syncSessionHint } from "./session-hint";
 
 /**
  * Helpers around the shared Better Auth client (`src/auth-client.ts`).
@@ -36,6 +39,37 @@ export function sessionUser(session: unknown): AuthUser | null {
 		email: u.email,
 		image: typeof u.image === "string" ? u.image : null,
 	};
+}
+
+/**
+ * Session plus the signed-out first-paint gate. Wait only when a previous
+ * visit recorded that a cookie should exist.
+ */
+export function useSignedInUser(): { user: AuthUser | null; waitForSession: boolean } {
+	const session = authClient.useSession();
+	const user = sessionUser(session.data);
+
+	useEffect(() => {
+		if (session.isPending) {
+			return;
+		}
+		syncSessionHint(user !== null);
+	}, [session.isPending, user]);
+
+	return {
+		user,
+		waitForSession: !user && session.isPending && hasSessionHint(),
+	};
+}
+
+export async function signOut(): Promise<void> {
+	beginSignOut();
+	try {
+		await authClient.signOut();
+	} catch (error) {
+		cancelSignOut();
+		throw error;
+	}
 }
 
 const AVATAR_COLORS = ["#5fb3a1", "#7c8cf8", "#e6a23c", "#d47bb0", "#6bb1e6", "#8fbf60"];
