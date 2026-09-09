@@ -1,12 +1,9 @@
-"use client";
-
 import {
   LucideLoader,
   LucideLoaderCircle,
   LucideLoaderPinwheel,
 } from "lucide-react";
 
-import type { ReactFC } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const variants = {
@@ -42,11 +39,11 @@ export interface SpinnerProps {
   className?: string;
 }
 
-export const Spinner: ReactFC<SpinnerProps> = ({
+export const Spinner = ({
   variant = "default",
   size = "md",
   className = "",
-}) => {
+}: SpinnerProps) => {
   const SpinnerIcon = variants[variant] || variants.default;
   const foundSize = sizes[size] || sizes.md;
 

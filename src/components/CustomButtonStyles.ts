@@ -1,7 +1,7 @@
 import * as React from "react";
 import { tv } from "tailwind-variants";
 
-import type { Size } from "@/lib/types";
+import type { Size } from "@/components/CustomButtonTypes";
 
 interface SizeStyle {
   iconSize?: number;

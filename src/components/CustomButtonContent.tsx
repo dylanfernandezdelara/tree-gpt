@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import type { Size } from "@/lib/types";
+import type { Size } from "@/components/CustomButtonTypes";
 import { cn } from "@/lib/utils";
 import {
   defaultIconSizes,

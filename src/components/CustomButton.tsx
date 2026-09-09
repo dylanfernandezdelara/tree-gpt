@@ -1,11 +1,6 @@
-"use client";
-
 import * as React from "react";
 
 import { processColor } from "@/lib/process-color";
-import type { ReactFC } from "@/lib/types";
-import { useLinkableComponent } from "@/hooks/useLinkableComponent";
-import { ConditionalTooltip } from "@/components/ConditionalTooltip";
 import {
   getButtonContent,
   getFinalIconSize,
@@ -20,11 +15,8 @@ const EMPTY_CLASS_NAMES: NonNullable<CustomButtonProps["classNames"]> = {};
 export const { buttonVariants } = CustomButtonStylesModule;
 export const { defaultIconSizes } = CustomButtonStylesModule;
 export const { sizeStyles } = CustomButtonStylesModule;
-export const { spinnerSizeMap } = CustomButtonStylesModule;
-export type ButtonVariantsProps = CustomButtonStylesModule.ButtonVariantsProps;
 export type CustomButtonProps = CustomButtonTypesModule.CustomButtonProps;
-export type CustomButtonVariant = CustomButtonTypesModule.CustomButtonVariant;
-export const CustomButton: ReactFC<CustomButtonProps> = ({
+export const CustomButton = ({
   className,
   variant = "filled",
   size = "md",
@@ -41,19 +33,9 @@ export const CustomButton: ReactFC<CustomButtonProps> = ({
   loading,
   children,
   classNames = EMPTY_CLASS_NAMES,
-  href,
-  external,
   disabled = false,
-  as = "button",
-  tooltip,
   ...props
-}) => {
-  const { Component, linkProps } = useLinkableComponent({
-    as,
-    external,
-    href,
-    ...props,
-  });
+}: CustomButtonProps) => {
   const finalColorValue = color || DEFAULT_LIGHT_COLOR;
   const finalDarkColorValue = darkColor ?? (color || DEFAULT_DARK_COLOR);
   const finalColor = processColor(finalColorValue);
@@ -74,47 +56,25 @@ export const CustomButton: ReactFC<CustomButtonProps> = ({
     rightSide,
     size,
   });
-  const buttonAttributes = {
-    className: buttonVariants({
-      class: className,
-      isIconButton: isIconOnly,
-      [borderVariantKey]: circle ? "circle" : "default",
-      size,
-      variant,
-    }),
-    style: {
-      "--button-color": `var(--color-${finalColor})`,
-      "--button-dark-color": `var(--color-${finalDarkColor})`,
-      ...style,
-    } satisfies React.CSSProperties & {
-      "--button-color": string;
-      "--button-dark-color": string;
-    },
-    ...linkProps,
-    ...props,
-  };
-  const button = (
-    <Component
-      {...buttonAttributes}
-      disabled={Component === "button" ? disabled || loading : undefined}
-      href={href}
+
+  return (
+    <button
+      className={buttonVariants({
+        class: className,
+        isIconButton: isIconOnly,
+        [borderVariantKey]: circle ? "circle" : "default",
+        size,
+        variant,
+      })}
+      style={{
+        "--button-color": `var(--color-${finalColor})`,
+        "--button-dark-color": `var(--color-${finalDarkColor})`,
+        ...style,
+      } as React.CSSProperties}
+      disabled={disabled || loading}
+      {...props}
     >
       {buttonContent}
-    </Component>
-  );
-
-  return tooltip ? (
-    <ConditionalTooltip
-      content={String(tooltip)}
-      condition={true}
-      classNames={{
-        tooltip: classNames.tooltip,
-      }}
-    >
-      {button}
-    </ConditionalTooltip>
-  ) : (
-    button
+    </button>
   );
 };
-CustomButton.displayName = "CustomButton";
