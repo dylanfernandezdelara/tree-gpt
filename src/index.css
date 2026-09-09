@@ -30,6 +30,9 @@
 	/* Everything renders at this fraction of its natural size, like a browser
 	   zoom, so more conversation fits on screen. */
 	--ui-scale: 0.9;
+	/* Viewport units resolve before `html { zoom }`. A zoomed `position: fixed`
+	   box must use this, or `100dvh` paints at `--ui-scale` of the screen. */
+	--visual-dvh: calc(100dvh / var(--ui-scale));
 	--sidebar-width: 260px;
 	--header-height: 52px;
 	--thread-width: 768px;
@@ -1307,7 +1310,8 @@ button {
 		bottom: 0;
 		left: 0;
 		z-index: 30;
-		max-height: 100dvh;
+		height: var(--visual-dvh);
+		max-height: var(--visual-dvh);
 		box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.2);
 	}
 
