@@ -1,13 +1,33 @@
 import {
+	useEffect,
 	useLayoutEffect,
 	useRef,
+	useState,
 	type FormEvent,
 	type KeyboardEvent,
 	type RefObject,
 } from "react";
+import { BorderBeam } from "border-beam";
 import { SendIcon, StopIcon } from "./Icons";
 
 const MAX_HEIGHT = 208;
+const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
+function usePrefersReducedMotion() {
+	const [reduce, setReduce] = useState(
+		() => typeof window !== "undefined" && window.matchMedia(REDUCED_MOTION).matches,
+	);
+
+	useEffect(() => {
+		const media = window.matchMedia(REDUCED_MOTION);
+		const update = () => setReduce(media.matches);
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
+
+	return reduce;
+}
 
 type Props = {
 	value: string;
@@ -37,6 +57,7 @@ export function Composer({
 	const localRef = useRef<HTMLTextAreaElement>(null);
 	const textareaRef = inputRef ?? localRef;
 	const canSend = value.trim() !== "" && !busy;
+	const reduceMotion = usePrefersReducedMotion();
 
 	useLayoutEffect(() => {
 		const el = textareaRef.current;
@@ -67,43 +88,54 @@ export function Composer({
 		}
 	}
 
+	// The beam breathes around the pill from send until the reply lands, then
+	// fades out. The wrapper clips to the pill radius, so it carries the shadow.
 	return (
-		<form
-			className="composer"
-			onSubmit={handleSubmit}
-			onClick={() => textareaRef.current?.focus()}
+		<BorderBeam
+			className="composer-beam"
+			active={streaming && !reduceMotion}
+			size="pulse-inner"
+			colorVariant="ocean"
+			theme="light"
+			strength={0.65}
 		>
-			<textarea
-				ref={textareaRef}
-				className="composer__input"
-				rows={1}
-				placeholder="Ask anything"
-				value={value}
-				onChange={(event) => onChange(event.target.value)}
-				onKeyDown={handleKeyDown}
-				autoFocus={autoFocus}
-				autoComplete="off"
-			/>
-			{streaming ? (
-				<button
-					type="submit"
-					className="composer__button composer__button--stop"
-					aria-label="Stop generating"
-					title="Stop generating"
-				>
-					<StopIcon />
-				</button>
-			) : (
-				<button
-					type="submit"
-					className="composer__button composer__button--send"
-					aria-label="Send message"
-					title="Send message"
-					disabled={!canSend}
-				>
-					<SendIcon />
-				</button>
-			)}
-		</form>
+			<form
+				className="composer"
+				onSubmit={handleSubmit}
+				onClick={() => textareaRef.current?.focus()}
+			>
+				<textarea
+					ref={textareaRef}
+					className="composer__input"
+					rows={1}
+					placeholder="Ask anything"
+					value={value}
+					onChange={(event) => onChange(event.target.value)}
+					onKeyDown={handleKeyDown}
+					autoFocus={autoFocus}
+					autoComplete="off"
+				/>
+				{streaming ? (
+					<button
+						type="submit"
+						className="composer__button composer__button--stop"
+						aria-label="Stop generating"
+						title="Stop generating"
+					>
+						<StopIcon />
+					</button>
+				) : (
+					<button
+						type="submit"
+						className="composer__button composer__button--send"
+						aria-label="Send message"
+						title="Send message"
+						disabled={!canSend}
+					>
+						<SendIcon />
+					</button>
+				)}
+			</form>
+		</BorderBeam>
 	);
 }
