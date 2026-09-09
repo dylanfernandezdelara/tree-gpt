@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { BookmarksView } from "./components/BookmarksView";
 import { ChatPane } from "./components/ChatPane";
 import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
@@ -6,10 +7,12 @@ import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
+import { copyMessages, lastPersistedId, newExchange, toTurns } from "./lib/chat-turns";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
 import { signOut, type AuthUser } from "./lib/auth-client";
-import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
-import { BookmarksView } from "./components/BookmarksView";
+import { listChats } from "./lib/chatsApi";
+import { RemoteSync } from "./lib/remote-sync";
+import { focusedOf, layoutOf, withLayout, type Store } from "./lib/workspace";
 import {
 	addBookmark,
 	dropBookmarksForChat,
@@ -32,7 +35,6 @@ import {
 	swapPanes,
 	type DragPayload,
 	type DropSide,
-	type LayoutNode,
 	type PaneLeaf,
 } from "./lib/layout";
 import {
@@ -46,7 +48,6 @@ import {
 	loadSidebarOpen,
 	loadSidebarTree,
 	newId,
-	persistableFields,
 	saveBookmarks,
 	saveBookmarksWidth,
 	saveLayout,
@@ -62,48 +63,7 @@ import {
 import type { Bookmark, Chat, Citation, ForkOrigin, Message, ToolCall } from "./types";
 import type { EffortId, ModelId } from "../worker/tree-types";
 
-const SYNC_DEBOUNCE_MS = 500;
 const NO_CHATS: Chat[] = [];
-
-/**
- * The chats currently on screen. `ns` identifies whose they are ("user:<id>");
- * `kind` says where they persist. A store is loaded whenever the signed-in
- * user changes, so chats from one namespace never leak into another.
- * `layout` is the split-pane tree and `focusedPaneId` the pane that sidebar
- * actions target.
- */
-type Store = {
-	ns: string;
-	kind: "local" | "remote";
-	chats: Chat[];
-	/** Which workspace is on screen. Both keep their own windows. */
-	view: "chats" | "bookmarks";
-	layout: LayoutNode;
-	focusedPaneId: string;
-	bookmarks: Bookmark[];
-	/** Bookmarks screen: at most two windows, stacked. Null until one opens. */
-	bookmarkLayout: LayoutNode | null;
-	bookmarkFocusedPaneId: string | null;
-};
-
-/** The windows of whichever workspace is showing. */
-function layoutOf(store: Store): LayoutNode | null {
-	return store.view === "chats" ? store.layout : store.bookmarkLayout;
-}
-
-function focusedOf(store: Store): string | null {
-	return store.view === "chats" ? store.focusedPaneId : store.bookmarkFocusedPaneId;
-}
-
-function withLayout(store: Store, root: LayoutNode, focusedPaneId?: string): Store {
-	return store.view === "chats"
-		? { ...store, layout: root, focusedPaneId: focusedPaneId ?? store.focusedPaneId }
-		: {
-				...store,
-				bookmarkLayout: root,
-				bookmarkFocusedPaneId: focusedPaneId ?? store.bookmarkFocusedPaneId,
-			};
-}
 
 /** A highlighted passage a pane will fork from once something is sent. */
 type ThreadAnchor = { messageId: string; quote: string };
@@ -111,7 +71,7 @@ type ThreadAnchor = { messageId: string; quote: string };
 const NO_FORKS: Chat[] = [];
 const NO_BOOKMARKS: Bookmark[] = [];
 
-export function ChatApp({ user }: { user: AuthUser }) {
+export default function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
 	const [model, setModel] = useState(loadSelectedModel);
@@ -395,11 +355,6 @@ export function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	/**
-	 * Fork from a highlighted passage. The new pane shows the SAME chat, so the
-	 * existing "open in two panes" rule forks it on the next send; the anchor
-	 * only decides how that fork is recorded.
-	 */
-	/**
 	 * Which way a pane should divide, from its shape on screen. The layout tree
 	 * knows how a pane was reached, not how wide the window is, so this reads the
 	 * rendered element; an unmeasurable pane falls back to the old rightward split.
@@ -411,6 +366,11 @@ export function ChatApp({ user }: { user: AuthUser }) {
 		return element ? squarestSplit(element.clientWidth, element.clientHeight) : "right";
 	}
 
+	/**
+	 * Fork from a highlighted passage. The new pane shows the SAME chat, so the
+	 * existing "open in two panes" rule forks it on the next send; the anchor
+	 * only decides how that fork is recorded.
+	 */
 	function startThread(paneId: string, messageId: string, quote: string) {
 		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		if (!pane?.chatId) {
@@ -982,124 +942,4 @@ export function ChatApp({ user }: { user: AuthUser }) {
 			</main>
 		</div>
 	);
-}
-
-/** A user message plus the placeholder for its reply. */
-function newExchange(content: string): { now: number; userMessage: Message; reply: Message } {
-	const now = Date.now();
-	return {
-		now,
-		userMessage: { id: newId(), role: "user", content, createdAt: now },
-		// Strictly later than the question: the Worker orders messages by
-		// created_at and breaks ties on the random message id, so sharing a
-		// timestamp lets the reply come back above the question.
-		reply: { id: newId(), role: "assistant", content: "", createdAt: now + 1, pending: true },
-	};
-}
-
-/**
- * Messages copied into a branched chat: finished turns only, with fresh ids
- * because message ids are unique across every chat on the backend.
- */
-function copyMessages(messages: Message[]): Message[] {
-	return messages
-		.filter((m) => !m.pending && !m.error)
-		.map((m) => ({ id: newId(), ...persistableFields(m) }));
-}
-
-/** Last message that survives into a fork, for recording where it diverged. */
-function lastPersistedId(messages: Message[]): string | null {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (!message.pending && !message.error) {
-			return message.id;
-		}
-	}
-	return null;
-}
-
-/** Conversation turns to send upstream: finished messages only. */
-function toTurns(messages: Message[]): ChatTurn[] {
-	return messages
-		.filter((m) => !m.pending && !m.error)
-		.map((m) => ({ role: m.role, content: m.content }));
-}
-
-/**
- * Pushes changes to /api/chats. Compares each chat by reference against the
- * last version it sent, so any mutation shows up as an upsert and any missing
- * id as a delete. Upserts are debounced and serialized per chat.
- */
-class RemoteSync {
-	private known: Map<string, Chat>;
-	private timers = new Map<string, number>();
-	private queues = new Map<string, Promise<void>>();
-	private disposed = false;
-
-	constructor(initial: Chat[]) {
-		this.known = new Map(initial.map((chat) => [chat.id, chat]));
-	}
-
-	reconcile(chats: Chat[]): void {
-		if (this.disposed) {
-			return;
-		}
-		const seen = new Set<string>();
-		for (const chat of chats) {
-			seen.add(chat.id);
-			if (this.known.get(chat.id) !== chat) {
-				this.known.set(chat.id, chat);
-				this.scheduleUpsert(chat);
-			}
-		}
-		for (const id of [...this.known.keys()]) {
-			if (!seen.has(id)) {
-				this.known.delete(id);
-				this.cancelTimer(id);
-				this.enqueue(id, async () => {
-					if (!(await deleteRemoteChat(id))) {
-						console.warn(`[Fork] Failed to delete chat ${id} on the server.`);
-					}
-				});
-			}
-		}
-	}
-
-	dispose(): void {
-		this.disposed = true;
-		for (const id of [...this.timers.keys()]) {
-			this.cancelTimer(id);
-		}
-	}
-
-	private scheduleUpsert(chat: Chat): void {
-		this.cancelTimer(chat.id);
-		const timer = window.setTimeout(() => {
-			this.timers.delete(chat.id);
-			const latest = this.known.get(chat.id);
-			if (!latest) {
-				return;
-			}
-			this.enqueue(chat.id, async () => {
-				if (!(await upsertChat(latest))) {
-					console.warn(`[Fork] Failed to save chat ${chat.id} on the server.`);
-				}
-			});
-		}, SYNC_DEBOUNCE_MS);
-		this.timers.set(chat.id, timer);
-	}
-
-	private cancelTimer(id: string): void {
-		const timer = this.timers.get(id);
-		if (timer !== undefined) {
-			window.clearTimeout(timer);
-			this.timers.delete(id);
-		}
-	}
-
-	private enqueue(id: string, task: () => Promise<void>): void {
-		const previous = this.queues.get(id) ?? Promise.resolve();
-		const next = previous.then(task, task);
-		this.queues.set(id, next);
-	}
 }

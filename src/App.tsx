@@ -5,16 +5,11 @@ import { useSignedInUser } from "./lib/auth-client";
 import { hasSessionHint } from "./lib/session-hint";
 
 /**
- * Chat UI (markdown, panes, bookmarks) stays out of the first-visit JS.
- * Returning signed-in visitors have a session hint, so we start the chunk
- * while get-session is still in flight.
+ * Chat UI stays out of the first-visit JS. Returning visitors have a session
+ * hint, so the same dynamic import starts the chunk during get-session.
  */
 const loadChatApp = () => import("./ChatApp");
-const ChatApp = lazy(async () => {
-	const { ChatApp: loaded } = await loadChatApp();
-	return { default: loaded };
-});
-
+const ChatApp = lazy(loadChatApp);
 if (hasSessionHint()) {
 	void loadChatApp();
 }
