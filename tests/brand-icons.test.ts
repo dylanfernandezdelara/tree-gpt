@@ -3,22 +3,30 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const MARK_PATHS = [
-	"M4 4v9a2 2 0 0 0 2 2h3M4 8h5",
-	"M11 6h5M11 15h5",
-] as const;
+function treeIconPathData(iconsSource: string): string[] {
+	const start = iconsSource.indexOf("export function TreeIcon");
+	if (start < 0) {
+		throw new Error("TreeIcon is missing");
+	}
+	const next = iconsSource.indexOf("\nexport function", start + 1);
+	const block = iconsSource.slice(start, next === -1 ? undefined : next);
+	const paths = [...block.matchAll(/\bd="([^"]+)"/g)].map((match) => match[1]);
+	if (paths.length === 0) {
+		throw new Error("TreeIcon has no path data");
+	}
+	return paths;
+}
 
 describe("brand icons", () => {
 	it("keeps the favicon and app icon on the TreeIcon mark", () => {
 		const favicon = readFileSync(resolve(root, "public/favicon.svg"), "utf8");
 		const appIcon = readFileSync(resolve(root, "public/icon.svg"), "utf8");
 		const icons = readFileSync(resolve(root, "src/components/Icons.tsx"), "utf8");
-		for (const d of MARK_PATHS) {
+		for (const d of treeIconPathData(icons)) {
 			expect(favicon).toContain(d);
 			expect(appIcon).toContain(d);
-			expect(icons).toContain(d);
 		}
 	});
 
