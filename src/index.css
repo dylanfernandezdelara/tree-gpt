@@ -867,6 +867,33 @@ details > .thinking__label {
 	overflow-wrap: anywhere;
 }
 
+.search-tools {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0 0 12px;
+}
+
+.search-tool {
+	margin-bottom: 0;
+	border-color: var(--border-medium);
+	background: var(--surface-sidebar);
+	color: var(--text-primary);
+}
+
+.search-sources {
+	margin: 12px 0 0;
+	color: var(--text-secondary);
+}
+
+.search-sources a {
+	color: var(--text-secondary);
+}
+
+.search-sources a:hover {
+	color: var(--text-primary);
+}
+
 @keyframes thinking {
 	0%,
 	100% {
