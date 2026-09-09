@@ -9,6 +9,7 @@ import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { copyMessages, lastPersistedId, newExchange, toTurns } from "./lib/chat-turns";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
+import { useHideOnScroll } from "./lib/use-hide-on-scroll";
 import { signOut, type AuthUser } from "./lib/auth-client";
 import { listChats } from "./lib/chatsApi";
 import { RemoteSync } from "./lib/remote-sync";
@@ -74,6 +75,8 @@ const NO_BOOKMARKS: Bookmark[] = [];
 export default function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
+	const mainRef = useRef<HTMLElement>(null);
+	const headerHidden = useHideOnScroll(mainRef, sidebarOpen);
 	const [model, setModel] = useState(loadSelectedModel);
 	/** Reasoning effort per model. Each model remembers its own setting. */
 	const [efforts, setEfforts] = useState(loadModelEfforts);
@@ -907,14 +910,17 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 					setReloadToken((n) => n + 1);
 				}}
 			/>
-			<main className="main">
+			<main className="main" ref={mainRef}>
 				{/* Only worth its height when the sidebar is away and it holds the controls. */}
 				{sidebarOpen ? null : (
-					<header className="main__header">
+					<header
+						className={`main__header${headerHidden ? " main__header--hidden" : ""}`}
+						inert={headerHidden}
+					>
 						<Button
 							variant="secondary"
 							size="icon-lg"
-							className="rounded-full shadow-sm max-[768px]:size-12"
+							className="rounded-full shadow-sm transition-transform duration-150 active:scale-95 max-[768px]:size-12"
 							aria-label="Open sidebar"
 							title="Open sidebar"
 							onClick={() => setSidebarOpen(true)}
@@ -924,7 +930,7 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 						<Button
 							variant="secondary"
 							size="icon-lg"
-							className="rounded-[14px] shadow-sm max-[768px]:size-12 max-[768px]:order-2"
+							className="rounded-[14px] shadow-sm transition-transform duration-150 active:scale-95 max-[768px]:size-12 max-[768px]:order-2"
 							aria-label="New chat"
 							title="New chat"
 							onClick={newChat}

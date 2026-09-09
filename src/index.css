@@ -935,6 +935,11 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.main__header,
+	.user-button--compact {
+		transition: none;
+	}
+
 	.cot-enter {
 		animation: none;
 	}
@@ -1318,9 +1323,48 @@ textarea {
 		--header-height: 68px;
 	}
 
+	.main {
+		position: relative;
+	}
+
 	.main__header {
+		position: absolute;
+		top: 0;
+		right: 0;
+		left: 0;
+		z-index: 20;
 		gap: 10px;
 		padding: 10px 12px;
+		background: var(--surface-main);
+		transition: transform 0.25s ease;
+	}
+
+	.main__header--hidden {
+		transform: translateY(-100%);
+		pointer-events: none;
+	}
+
+	.main__header::after {
+		content: "";
+		position: absolute;
+		top: 100%;
+		right: 0;
+		left: 0;
+		height: 16px;
+		pointer-events: none;
+		background: linear-gradient(to bottom, var(--surface-main), transparent);
+	}
+
+	.thread__inner {
+		padding-top: calc(12px + var(--header-inset) + var(--header-height));
+	}
+
+	.empty {
+		padding-top: calc(var(--header-inset) + var(--header-height) + 16px);
+	}
+
+	.bookmarks__header {
+		padding-top: calc(16px + var(--header-height));
 	}
 
 	.sidebar__header {
@@ -1545,6 +1589,11 @@ textarea {
 	padding: 2px;
 	border-radius: 50%;
 	justify-content: center;
+	transition: transform 150ms ease;
+}
+
+.user-button--compact:active {
+	transform: scale(0.95);
 }
 
 .user-button__text {
