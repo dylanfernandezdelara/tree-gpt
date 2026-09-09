@@ -74,6 +74,47 @@ describe("sendChatStream", () => {
 		expect(sent.stream).toBe(true);
 	});
 
+	it("forwards live search snapshots before the done frame", async () => {
+		fetchMock.mockResolvedValue(
+			sseResponse(
+				`data: {"type":"search","toolCalls":[{"id":"call_1","name":"web_search","query":"us open","state":"input-available"}]}\n\n` +
+					`data: {"type":"search","citations":[{"url":"https://www.example.com/us-open","title":"US Open"}],"toolCalls":[{"id":"call_1","name":"web_search","query":"us open","state":"output-available"}]}\n\n` +
+					`data: {"type":"content","text":"Alcaraz won."}\n\n` +
+					`data: {"type":"done","model":"meta/muse-spark-1.3-contributor","citations":[{"url":"https://www.example.com/us-open","title":"US Open"}],"toolCalls":[{"id":"call_1","name":"web_search","query":"us open","state":"output-available"}]}\n\n`,
+			),
+		);
+		const updates: StreamUpdate[] = [];
+		const result = await sendChatStream(
+			[{ role: "user", content: "who won" }],
+			new AbortController().signal,
+			(update) => updates.push(update),
+		);
+		expect(updates).toEqual([
+			{
+				type: "search",
+				toolCalls: [
+					{ id: "call_1", name: "web_search", query: "us open", state: "input-available" },
+				],
+			},
+			{
+				type: "search",
+				citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
+				toolCalls: [
+					{ id: "call_1", name: "web_search", query: "us open", state: "output-available" },
+				],
+			},
+			{ type: "content", text: "Alcaraz won." },
+		]);
+		expect(result).toEqual({
+			ok: true,
+			model: "meta/muse-spark-1.3-contributor",
+			citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
+			toolCalls: [
+				{ id: "call_1", name: "web_search", query: "us open", state: "output-available" },
+			],
+		});
+	});
+
 	it("reads citations and toolCalls from the done frame", async () => {
 		fetchMock.mockResolvedValue(
 			sseResponse(

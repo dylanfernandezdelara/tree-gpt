@@ -60,7 +60,7 @@ import {
 	titleFromMessage,
 	type SidebarTree,
 } from "./lib/storage";
-import type { Bookmark, Chat, ForkOrigin, Message } from "./types";
+import type { Bookmark, Chat, Citation, ForkOrigin, Message, ToolCall } from "./types";
 import type { EffortId, ModelId } from "../worker/tree-types";
 
 const SYNC_DEBOUNCE_MS = 500;
@@ -515,6 +515,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 		setPendingIds((prev) => new Set(prev).add(chatId));
 		let reasoning = "";
 		let content = "";
+		let citations: Citation[] = [];
+		let toolCalls: ToolCall[] = [];
 		const applyUpdate = (update: StreamUpdate) => {
 			switch (update.type) {
 				case "reasoning":
@@ -523,15 +525,24 @@ function ChatApp({ user }: { user: AuthUser }) {
 				case "content":
 					content += update.text;
 					break;
+				case "search":
+					if (update.citations) {
+						citations = update.citations;
+					}
+					if (update.toolCalls) {
+						toolCalls = update.toolCalls;
+					}
+					break;
 				default: {
 					const unseen: never = update;
 					void unseen;
 				}
 			}
-			const snapshot = { content, reasoning };
 			setReply(chatId, replyId, {
-				content: snapshot.content,
-				...(snapshot.reasoning ? { reasoning: snapshot.reasoning } : {}),
+				content,
+				citations,
+				toolCalls,
+				...(reasoning ? { reasoning } : {}),
 			});
 		};
 		try {

@@ -14,6 +14,8 @@ import {
 import {
 	createSearchAccumulator,
 	finalizeSearchMeta,
+	searchFingerprint,
+	snapshotSearchMeta,
 	ingestOpenRouterPayload,
 	searchMetaFromPayload,
 } from "./search-meta.js";
@@ -234,6 +236,7 @@ function fetchOpenRouter(
 		tools: readonly [typeof WEB_SEARCH_TOOL];
 		max_tool_calls: typeof MAX_TOOL_CALLS;
 		stream?: boolean;
+		stream_options?: { include_usage: true };
 		session_id?: string;
 	} = {
 		model: init.model,
@@ -254,6 +257,10 @@ function fetchOpenRouter(
 	};
 	if (init.stream) {
 		body.stream = true;
+		// Chat Completions omits `usage` on SSE unless asked. Without it,
+		// `web_search_requests` never arrives and a search with no citations
+		// produces no chip.
+		body.stream_options = { include_usage: true };
 	}
 	if (options?.sessionId) {
 		body.session_id = options.sessionId;
@@ -315,10 +322,11 @@ export async function requestCompletion(
 	return { ok: true, value: parsed.completion };
 }
 
-/** Client-facing stream event: text deltas, then done (or error). */
+/** Client-facing stream event: text deltas, live search snapshots, then done (or error). */
 export type StreamEvent =
 	| { type: "reasoning"; text: string }
 	| { type: "content"; text: string }
+	| { type: "search"; citations?: Citation[]; toolCalls?: ToolCall[] }
 	| { type: "done"; model: string; citations?: Citation[]; toolCalls?: ToolCall[] }
 	| { type: "error"; error: string };
 
@@ -471,6 +479,7 @@ function translateStream(
 	let reasoningSent = 0;
 	let finished = false;
 	const searchAcc = createSearchAccumulator();
+	let lastSearchFingerprint = "";
 
 	return new ReadableStream<UpstreamEvent>({
 		// Pump from start(), not pull(): resolving pulls without enqueueing
@@ -591,6 +600,12 @@ function translateStream(
 				return ["upstream-error"];
 			}
 			ingestOpenRouterPayload(searchAcc, payload);
+			const search = snapshotSearchMeta(searchAcc);
+			const fingerprint = searchFingerprint(search);
+			if (search && fingerprint !== lastSearchFingerprint) {
+				lastSearchFingerprint = fingerprint;
+				events.push({ type: "search", ...search });
+			}
 			const delta = readDelta(payload);
 			if (!delta) {
 				continue;
