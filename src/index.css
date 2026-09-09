@@ -1307,11 +1307,9 @@ button {
 	.sidebar {
 		position: fixed;
 		top: 0;
-		bottom: 0;
 		left: 0;
 		z-index: 30;
 		height: var(--visual-dvh);
-		max-height: var(--visual-dvh);
 		box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.2);
 	}
 
