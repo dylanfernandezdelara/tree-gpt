@@ -25,8 +25,8 @@ export function LoginPending() {
 
 function LoginChrome({ children }: { children: ReactNode }) {
 	return (
-		<div className="grid min-h-full lg:grid-cols-2">
-			<div className="flex flex-col gap-4 p-6 md:p-10">
+		<div className="grid min-h-full grid-rows-[minmax(0,1fr)_min(36svh,280px)] lg:grid-cols-2 lg:grid-rows-none">
+			<div className="flex min-h-0 flex-col gap-4 p-6 md:p-10">
 				<div className="flex justify-center md:justify-start">
 					<a
 						href="/"
@@ -40,7 +40,7 @@ function LoginChrome({ children }: { children: ReactNode }) {
 					<div className="w-full max-w-xs">{children}</div>
 				</div>
 			</div>
-			<div className="relative hidden lg:block">
+			<div className="relative min-h-0 overflow-hidden">
 				<ForkMarkGrid />
 			</div>
 		</div>
