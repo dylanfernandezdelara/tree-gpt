@@ -4,8 +4,8 @@ React + Vite frontend on Cloudflare Workers, with a Worker API.
 
 ## Setup
 
-1. Copy `.dev.vars.example` to `.dev.vars` and set `OPENROUTER_API_KEY`, `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` (random, ≥32 chars: `openssl rand -base64 32`).
-2. Create a GitHub OAuth App (not a GitHub App): Homepage `http://localhost:5173`, callback `http://localhost:5173/api/auth/callback/github`.
+1. Copy `.dev.vars.example` to `.dev.vars` and set `OPENROUTER_API_KEY`, `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` (random, ≥32 chars: `openssl rand -base64 32`).
+2. Create a GitHub OAuth App (not a GitHub App): Homepage `http://localhost:5173`, callback `http://localhost:5173/api/auth/callback/github`. For Google, create a Web application OAuth client with origins `http://localhost:5173` and `https://forkgpt.app`, and redirect URIs `http://localhost:5173/api/auth/callback/google` and `https://forkgpt.app/api/auth/callback/google`.
 3. Run migrations, then start the app (use `localhost`, not `127.0.0.1`):
 
 ```bash
@@ -13,7 +13,7 @@ npm run db:migrate:local
 npm run dev # http://localhost:5173
 ```
 
-Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). Production is `https://forkgpt.app`. Register `<origin>/api/auth/callback/github` on the GitHub OAuth App for each hostname you sign in on.
+Deploy with `npm run deploy` (it applies D1 migrations first, then deploys). Production is `https://forkgpt.app`. Register `<origin>/api/auth/callback/github` on the GitHub OAuth App, and the matching Google redirect URI on the Google client, for each hostname you sign in on.
 
 ## API
 

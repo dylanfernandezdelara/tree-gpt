@@ -1611,34 +1611,6 @@ button {
 	background: var(--surface-hover);
 }
 
-/* ---------- Login page ---------- */
-
-.login-page {
-	display: flex;
-	min-height: 100dvh;
-	align-items: center;
-	justify-content: center;
-	padding: 24px;
-	background: var(--surface-sidebar);
-}
-
-.login-page__status,
-.login-page__copy {
-	margin: 0 0 20px;
-	font-size: 14px;
-	line-height: 20px;
-	text-align: center;
-	color: var(--text-secondary);
-}
-
-.login-page .auth-dialog {
-	box-shadow: var(--menu-shadow);
-}
-
-.login-page .auth-dialog__title {
-	margin-bottom: 12px;
-}
-
 /* ---------- Auth dialog ---------- */
 
 .auth-backdrop {

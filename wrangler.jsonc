@@ -30,6 +30,8 @@
 			"GITHUB_CLIENT_ID",
 			"GITHUB_CLIENT_SECRET",
 			"BETTER_AUTH_SECRET",
+			"GOOGLE_CLIENT_ID",
+			"GOOGLE_CLIENT_SECRET",
 		],
 	},
 	"d1_databases": [
