@@ -127,7 +127,7 @@ function App() {
 		return <LoginPage />;
 	}
 
-	return <ChatApp user={user} />;
+	return <ChatApp key={user.id} user={user} />;
 }
 
 function ChatApp({ user }: { user: AuthUser }) {
@@ -162,6 +162,9 @@ function ChatApp({ user }: { user: AuthUser }) {
 	} | null>(null);
 	const [bookmarksWidth, setBookmarksWidth] = useState(loadBookmarksWidth);
 	const [sidebarTree, setSidebarTree] = useState<SidebarTree>({ view: "tree", expanded: [] });
+	/** How the first /api/chats fetch went, so a 500 is not drawn as "no chats". */
+	const [historyStatus, setHistoryStatus] = useState<"loading" | "error" | null>("loading");
+	const [reloadToken, setReloadToken] = useState(0);
 	const pendingRef = useRef(new Map<string, AbortController>());
 	const syncRef = useRef<RemoteSync | null>(null);
 
@@ -190,12 +193,14 @@ function ChatApp({ user }: { user: AuthUser }) {
 			if (remote) {
 				chats = remote;
 				kind = "remote";
+				setHistoryStatus(null);
 			} else {
 				console.warn(
 					"[Fork] /api/chats is not available; keeping this account's chats on this device for now.",
 				);
 				chats = loadLocalChats(ns);
 				kind = "local";
+				setHistoryStatus("error");
 			}
 			// The Worker does not persist `origin` yet, so fill it from the local
 			// mirror. A server-provided origin always wins.
@@ -226,7 +231,7 @@ function ChatApp({ user }: { user: AuthUser }) {
 		}
 		void load();
 		return () => controller.abort();
-	}, [namespace]);
+	}, [namespace, reloadToken]);
 
 	// Persist: local stores write the chats; remote stores push changes; every store remembers its layout.
 	useEffect(() => {
@@ -955,6 +960,11 @@ function ChatApp({ user }: { user: AuthUser }) {
 				onToggleRow={toggleForkRow}
 				onDragStart={setDrag}
 				onDragEnd={() => setDrag(null)}
+				historyStatus={historyStatus}
+				onRetry={() => {
+					setHistoryStatus("loading");
+					setReloadToken((n) => n + 1);
+				}}
 			/>
 			<main className="main">
 				{/* Only worth its height when the sidebar is away and it holds the controls. */}

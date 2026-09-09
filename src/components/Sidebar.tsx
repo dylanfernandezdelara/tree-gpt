@@ -47,6 +47,9 @@ type Props = {
 	onToggleRow: (chatId: string) => void;
 	onDragStart: (payload: DragPayload) => void;
 	onDragEnd: () => void;
+	/** First fetch of /api/chats. A failure must not look like an empty account. */
+	historyStatus?: "loading" | "error" | null;
+	onRetry?: () => void;
 };
 
 export function Sidebar({
@@ -68,6 +71,8 @@ export function Sidebar({
 	onToggleRow,
 	onDragStart,
 	onDragEnd,
+	historyStatus,
+	onRetry,
 }: Props) {
 	const navRef = useRef<HTMLElement>(null);
 
@@ -121,6 +126,19 @@ export function Sidebar({
 						<BookmarkIcon />
 						<span>Bookmarks</span>
 					</button>
+					{historyStatus === "loading" && chats.length === 0 ? (
+						<p className="sidebar__status">Loading chats…</p>
+					) : null}
+					{historyStatus === "error" ? (
+						<div className="sidebar__status" role="alert">
+							<p className="sidebar__status-copy">Couldn't load your chats.</p>
+							{onRetry ? (
+								<button type="button" className="error-box__retry" onClick={onRetry}>
+									Retry
+								</button>
+							) : null}
+						</div>
+					) : null}
 					{chats.length > 0 ? (
 						<>
 							<div className="sidebar__section">

@@ -11,14 +11,16 @@ import { dropTransient, isChat, orderMessages } from "./storage";
  * All calls rely on the Better Auth session cookie.
  */
 
-/** The caller's chats, or null when the endpoint is unavailable (stub, 401, network). */
+/** The caller's chats, or null when the endpoint is unavailable (stub, 401, 500, network). */
 export async function listChats(signal: AbortSignal): Promise<Chat[] | null> {
 	try {
 		const response = await fetch("/api/chats", {
 			headers: { Accept: "application/json" },
+			credentials: "same-origin",
 			signal,
 		});
 		if (!response.ok) {
+			console.warn(`[Fork] GET /api/chats returned ${response.status}`);
 			return null;
 		}
 		const data: unknown = await response.json();
@@ -27,7 +29,11 @@ export async function listChats(signal: AbortSignal): Promise<Chat[] | null> {
 		}
 		const chats = data.chats;
 		return Array.isArray(chats) ? chats.filter(isChat).map(orderMessages) : null;
-	} catch {
+	} catch (error) {
+		if (error instanceof DOMException && error.name === "AbortError") {
+			return null;
+		}
+		console.warn("[Fork] GET /api/chats failed", error);
 		return null;
 	}
 }

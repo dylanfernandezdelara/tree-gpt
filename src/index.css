@@ -145,6 +145,7 @@ button {
 	flex-direction: column;
 	width: var(--sidebar-width);
 	height: 100%;
+	min-height: 0;
 }
 
 .sidebar__header {
@@ -164,8 +165,10 @@ button {
 
 .sidebar__nav {
 	flex: 1;
+	min-height: 0;
 	padding: 8px 0 12px;
 	overflow-y: auto;
+	-webkit-overflow-scrolling: touch;
 }
 
 .sidebar__row {
@@ -202,6 +205,17 @@ button {
 	line-height: 20px;
 	font-weight: 500;
 	color: var(--text-tertiary);
+}
+
+.sidebar__status {
+	margin: 16px 16px 8px;
+	color: var(--text-secondary);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+.sidebar__status-copy {
+	margin: 0 0 8px;
 }
 
 .sidebar__section-toggle {
@@ -1293,6 +1307,7 @@ button {
 		bottom: 0;
 		left: 0;
 		z-index: 30;
+		max-height: 100dvh;
 		box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.2);
 	}
 
