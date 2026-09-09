@@ -283,6 +283,7 @@ describe("handleOpenRouterRequest", () => {
 			unknown
 		>;
 		expect(upstream.stream).toBe(true);
+		expect(upstream.stream_options).toEqual({ include_usage: true });
 		// The trace is wanted back for display, so no `exclude` — but the
 		// display-only field from history must never be forwarded.
 		expect(upstream.reasoning).toEqual({ effort: "minimal" });
@@ -327,6 +328,19 @@ describe("handleOpenRouterRequest", () => {
 			.filter((frame) => frame.startsWith("data:"))
 			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
 		expect(events).toEqual([
+			{
+				type: "search",
+				toolCalls: [
+					{ id: "call_1", name: "web_search", query: "us open", state: "input-available" },
+				],
+			},
+			{
+				type: "search",
+				citations: [{ url: "https://example.com/", title: "Example" }],
+				toolCalls: [
+					{ id: "call_1", name: "web_search", query: "us open", state: "output-available" },
+				],
+			},
 			{ type: "content", text: "The match is underway." },
 			{
 				type: "done",

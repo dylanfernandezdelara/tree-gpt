@@ -503,6 +503,9 @@ export async function persistFromStream(
 				switch (value.type) {
 					case "heartbeat":
 						break;
+					case "search":
+						// Live snapshots are for the client. Persist from `done`.
+						break;
 					case "done":
 						citations = value.citations;
 						toolCalls = value.toolCalls;
@@ -557,6 +560,7 @@ export function toTurnStream(
 					switch (value.type) {
 						case "reasoning":
 						case "content":
+						case "search":
 						case "heartbeat":
 							controller.enqueue(value);
 							break;

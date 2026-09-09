@@ -10,7 +10,8 @@ export type ChatTurn = { role: Role; content: string };
 
 export type StreamUpdate =
 	| { type: "reasoning"; text: string }
-	| { type: "content"; text: string };
+	| { type: "content"; text: string }
+	| { type: "search"; citations?: Citation[]; toolCalls?: ToolCall[] };
 
 export type StreamResult =
 	| { ok: true; model: string; citations?: Citation[]; toolCalls?: ToolCall[] }
@@ -141,6 +142,18 @@ function handleStreamFrame(
 		if (event.type === "reasoning" || event.type === "content") {
 			if ("text" in event && typeof event.text === "string" && event.text) {
 				onUpdate({ type: event.type, text: event.text });
+			}
+			continue;
+		}
+		if (event.type === "search") {
+			const citations = "citations" in event ? sanitizeCitations(event.citations) : [];
+			const toolCalls = "toolCalls" in event ? sanitizeToolCalls(event.toolCalls) : [];
+			if (citations.length > 0 || toolCalls.length > 0) {
+				onUpdate({
+					type: "search",
+					...(citations.length > 0 ? { citations } : {}),
+					...(toolCalls.length > 0 ? { toolCalls } : {}),
+				});
 			}
 			continue;
 		}

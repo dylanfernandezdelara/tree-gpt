@@ -109,9 +109,11 @@ export function parseStoredSearchJson<T>(
 export function ingestOpenRouterPayload(acc: SearchAccumulator, payload: object): void {
 	const usage = field(payload, "usage");
 	const serverToolUse = usage ? field(usage, "server_tool_use") : null;
-	const requests = serverToolUse ? field(serverToolUse, "web_search_requests") : null;
-	if (typeof requests === "number" && Number.isFinite(requests) && requests > acc.webSearchRequests) {
-		acc.webSearchRequests = requests;
+	if (serverToolUse && "web_search_requests" in serverToolUse) {
+		const requests = serverToolUse.web_search_requests;
+		if (typeof requests === "number" && Number.isFinite(requests) && requests > acc.webSearchRequests) {
+			acc.webSearchRequests = requests;
+		}
 	}
 
 	const choice = firstChoice(payload);
@@ -125,14 +127,44 @@ export function ingestOpenRouterPayload(acc: SearchAccumulator, payload: object)
 }
 
 export function finalizeSearchMeta(acc: SearchAccumulator): SearchMeta {
+	return searchMetaFromAcc(acc, "output-available", true);
+}
+
+/**
+ * Mid-stream snapshot for the UI. Emits only what OpenRouter has actually
+ * sent (tool_calls deltas, url_citation annotations, web_search_requests).
+ * Does not invent a search from silence or heartbeats. Partial tool_calls
+ * stay `input-available` until citations or a request count arrive.
+ */
+export function snapshotSearchMeta(acc: SearchAccumulator): SearchMeta | undefined {
+	const meta = searchMetaFromAcc(
+		acc,
+		acc.webSearchRequests > 0 || acc.citations.length > 0 ? "output-available" : "input-available",
+		acc.webSearchRequests > 0 || acc.citations.length > 0,
+	);
+	if (!meta.citations && !meta.toolCalls) {
+		return undefined;
+	}
+	return meta;
+}
+
+export function searchFingerprint(meta: SearchMeta | undefined): string {
+	return meta ? JSON.stringify(meta) : "";
+}
+
+function searchMetaFromAcc(
+	acc: SearchAccumulator,
+	toolState: ToolCallState,
+	synthesizeIfSearched: boolean,
+): SearchMeta {
 	const citations = sanitizeCitations(acc.citations);
 	const parsedTools: ToolCall[] = [];
 	for (const [index, partial] of [...acc.tools.entries()].sort((a, b) => a[0] - b[0])) {
 		const call = sanitizeToolCall({
 			id: partial.id ?? `web_search_${index}`,
-			name: toolName(partial.name),
+			name: toolName(partial.name) ?? "web_search",
 			query: queryFromArgs(partial.args),
-			state: "output-available",
+			state: toolState,
 		});
 		if (call) {
 			parsedTools.push(call);
@@ -140,8 +172,8 @@ export function finalizeSearchMeta(acc: SearchAccumulator): SearchMeta {
 	}
 	let toolCalls = sanitizeToolCalls(parsedTools);
 	const searched = acc.webSearchRequests > 0 || citations.length > 0 || toolCalls.length > 0;
-	if (searched && toolCalls.length === 0) {
-		toolCalls = [{ id: "web_search", name: "web_search", state: "output-available" }];
+	if (synthesizeIfSearched && searched && toolCalls.length === 0) {
+		toolCalls = [{ id: "web_search_0", name: "web_search", state: "output-available" }];
 	}
 	return {
 		...(citations.length > 0 ? { citations } : {}),
@@ -264,7 +296,7 @@ function ingestToolCallDeltas(acc: SearchAccumulator, container: object | null):
 		if (typeof raw !== "object" || raw === null) {
 			continue;
 		}
-		const index = "index" in raw && typeof raw.index === "number" ? raw.index : acc.tools.size;
+		const index = "index" in raw && typeof raw.index === "number" ? raw.index : 0;
 		const prev = acc.tools.get(index) ?? { args: "" };
 		if ("id" in raw && typeof raw.id === "string" && raw.id) {
 			prev.id = raw.id;
@@ -302,8 +334,11 @@ function queryFromArgs(args: string): string | undefined {
 			}
 		}
 	} catch {
-		const trimmed = args.trim();
-		return trimmed ? trimmed.slice(0, MAX_QUERY) : undefined;
+		const match = /"(?:query|q|search)"\s*:\s*"((?:\\.|[^"\\])*)/.exec(args);
+		if (match?.[1]) {
+			return match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").slice(0, MAX_QUERY);
+		}
+		return undefined;
 	}
 	return undefined;
 }
