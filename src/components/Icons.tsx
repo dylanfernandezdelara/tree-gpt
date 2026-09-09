@@ -179,6 +179,7 @@ export function ForkIcon(props: IconProps) {
 	);
 }
 
+/** The Fork mark. Keep `public/favicon.svg` and `public/icon.svg` on the same paths. */
 export function TreeIcon(props: IconProps) {
 	return (
 		<Svg {...props}>
