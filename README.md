@@ -4,7 +4,7 @@ React + Vite frontend on Cloudflare Workers, with a Worker API.
 
 ## Setup
 
-1. Copy `.dev.vars.example` to `.dev.vars` and set `OPENROUTER_API_KEY`, `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` (random, ≥32 chars: `openssl rand -base64 32`). Optional Google login: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+1. Copy `.dev.vars.example` to `.dev.vars` and set `OPENROUTER_API_KEY`, `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`, `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, and `BETTER_AUTH_SECRET` (random, ≥32 chars: `openssl rand -base64 32`).
 2. Create a GitHub OAuth App (not a GitHub App): Homepage `http://localhost:5173`, callback `http://localhost:5173/api/auth/callback/github`. For Google, create a Web application OAuth client with origins `http://localhost:5173` and `https://forkgpt.app`, and redirect URIs `http://localhost:5173/api/auth/callback/google` and `https://forkgpt.app/api/auth/callback/google`.
 3. Run migrations, then start the app (use `localhost`, not `127.0.0.1`):
 

@@ -1,8 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 import { ForkMarkGrid } from "@/components/ForkMarkGrid";
-import { TreeIcon } from "@/components/Icons";
-import { SocialLoginButton } from "@/components/SocialLoginButton";
+import { GitHubIcon, GoogleIcon, TreeIcon } from "@/components/Icons";
 import { authClient } from "./auth-client";
 
 type LoginProvider = "github" | "google";
@@ -47,8 +46,6 @@ function LoginChrome({ children }: { children: ReactNode }) {
 	);
 }
 
-const buttonClassName = "login-provider w-full text-foreground focus-visible:ring-[#3a83f7]";
-
 function LoginForm() {
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState<LoginProvider | null>(null);
@@ -79,23 +76,27 @@ function LoginForm() {
 				</h1>
 				<p className="text-sm text-muted-foreground">A chat you can fork.</p>
 			</div>
-			<div className="grid gap-3">
-				<SocialLoginButton
-					provider="github"
-					label="GitHub"
-					className={buttonClassName}
-					loading={busy === "github"}
+			<div className="auth-providers">
+				<button
+					type="button"
+					className="pill-button pill-button--secondary auth-provider"
 					disabled={busy !== null}
+					aria-busy={busy === "github" || undefined}
 					onClick={() => void signIn("github")}
-				/>
-				<SocialLoginButton
-					provider="google"
-					label="Google"
-					className={buttonClassName}
-					loading={busy === "google"}
+				>
+					<GitHubIcon />
+					GitHub
+				</button>
+				<button
+					type="button"
+					className="pill-button pill-button--secondary auth-provider"
 					disabled={busy !== null}
+					aria-busy={busy === "google" || undefined}
 					onClick={() => void signIn("google")}
-				/>
+				>
+					<GoogleIcon />
+					Google
+				</button>
 			</div>
 			{error ? (
 				<p role="alert" className="text-center text-sm text-destructive">

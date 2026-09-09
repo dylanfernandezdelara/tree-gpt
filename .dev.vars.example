@@ -2,6 +2,5 @@ OPENROUTER_API_KEY=
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 BETTER_AUTH_SECRET=
-# Optional. Google button is shown either way; without these, that provider 404s.
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
