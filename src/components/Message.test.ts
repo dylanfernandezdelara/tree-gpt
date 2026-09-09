@@ -165,6 +165,18 @@ describe("MessageView chain of thought", () => {
 		expect(html.indexOf(">Thought<")).toBeLessThan(html.indexOf("Carlos Alcaraz won."));
 	});
 
+	it("keeps a line break after a bold title so Muse sections do not smash", () => {
+		const html = render({
+			id: "m3",
+			role: "assistant",
+			createdAt: 3,
+			content:
+				"**2. Split to chase a tangent**\nFork the whole chat to explore a \"what if?\" or side-question.",
+		});
+		expect(html).toMatch(/tangent<\/strong><br\s*\/?>\s*Fork the whole chat/);
+		expect(html).not.toContain("tangent</strong> Fork");
+	});
+
 	it("omits the chain entirely on a plain landed reply", () => {
 		const html = render({ ...searched, toolCalls: undefined, citations: undefined });
 		expect(html).toContain("Carlos Alcaraz won.");
