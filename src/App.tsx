@@ -8,13 +8,7 @@ import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
-import { authClient, sessionUser, type AuthUser } from "./lib/auth-client";
-import {
-	clearSessionHint,
-	hasSessionHint,
-	showSessionPending,
-	syncSessionHint,
-} from "./lib/session-hint";
+import { signOut, useSignedInUser, type AuthUser } from "./lib/auth-client";
 import { deleteChat as deleteRemoteChat, listChats, upsertChat } from "./lib/chatsApi";
 import { BookmarksView } from "./components/BookmarksView";
 import {
@@ -119,25 +113,10 @@ const NO_FORKS: Chat[] = [];
 const NO_BOOKMARKS: Bookmark[] = [];
 
 function App() {
-	const session = authClient.useSession();
-	const user = sessionUser(session.data);
-
-	useEffect(() => {
-		if (session.isPending) {
-			return;
-		}
-		syncSessionHint(user !== null);
-	}, [session.isPending, user]);
-
+	const { user, waitForSession } = useSignedInUser();
 	if (!user) {
-		// HttpOnly session cookie: first paint cannot know signed-in vs out.
-		// Only block on get-session when a previous visit said a cookie exists.
-		if (showSessionPending(session.isPending, hasSessionHint())) {
-			return <LoginPending />;
-		}
-		return <LoginPage />;
+		return waitForSession ? <LoginPending /> : <LoginPage />;
 	}
-
 	return <ChatApp key={user.id} user={user} />;
 }
 
@@ -860,9 +839,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 	}
 
 	async function logOut() {
-		clearSessionHint();
 		try {
-			await authClient.signOut();
+			await signOut();
 		} catch {
 			// The session store refreshes on its own; nothing else to do here.
 		}

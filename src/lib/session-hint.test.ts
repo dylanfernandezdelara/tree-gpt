@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	beginSignOut,
+	cancelSignOut,
 	clearSessionHint,
 	hasSessionHint,
 	markOAuthRedirect,
-	showSessionPending,
 	syncSessionHint,
-	writeSessionHint,
 } from "./session-hint";
 
 afterEach(() => {
@@ -13,22 +13,7 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe("showSessionPending", () => {
-	it("does not hide the login form while the session is still unknown", () => {
-		expect(showSessionPending(true, false)).toBe(false);
-	});
-
-	it("waits when a previous visit said a session should exist", () => {
-		expect(showSessionPending(true, true)).toBe(true);
-	});
-
-	it("never waits once the session has resolved", () => {
-		expect(showSessionPending(false, true)).toBe(false);
-		expect(showSessionPending(false, false)).toBe(false);
-	});
-});
-
-describe("session hint storage", () => {
+describe("session hint", () => {
 	const store = new Map<string, string>();
 
 	afterEach(() => {
@@ -50,15 +35,15 @@ describe("session hint storage", () => {
 	it("is absent until a session is recorded", () => {
 		stubStorage();
 		expect(hasSessionHint()).toBe(false);
-		writeSessionHint(true);
+		syncSessionHint(true);
 		expect(hasSessionHint()).toBe(true);
-		writeSessionHint(false);
+		syncSessionHint(false);
 		expect(hasSessionHint()).toBe(false);
 	});
 
 	it("treats missing localStorage as signed out, without throwing", () => {
 		expect(hasSessionHint()).toBe(false);
-		expect(() => writeSessionHint(true)).not.toThrow();
+		expect(() => syncSessionHint(true)).not.toThrow();
 		expect(hasSessionHint()).toBe(false);
 	});
 
@@ -72,11 +57,23 @@ describe("session hint storage", () => {
 		expect(hasSessionHint()).toBe(false);
 	});
 
-	it("records a confirmed session and clears a confirmed miss", () => {
+	it("does not restore the hint from a stale session after logout starts", () => {
 		stubStorage();
 		syncSessionHint(true);
-		expect(hasSessionHint()).toBe(true);
+		beginSignOut();
+		expect(hasSessionHint()).toBe(false);
+		syncSessionHint(true);
+		expect(hasSessionHint()).toBe(false);
 		syncSessionHint(false);
 		expect(hasSessionHint()).toBe(false);
+	});
+
+	it("restores the hint if logout is cancelled and the session is still there", () => {
+		stubStorage();
+		syncSessionHint(true);
+		beginSignOut();
+		cancelSignOut();
+		syncSessionHint(true);
+		expect(hasSessionHint()).toBe(true);
 	});
 });
