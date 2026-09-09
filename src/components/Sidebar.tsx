@@ -11,6 +11,7 @@ import { writeDragPayload, type DragPayload } from "../lib/layout";
 import type { SidebarView } from "../lib/storage";
 import type { Chat } from "../types";
 import { IconButton } from "./IconButton";
+import { Button } from "./ui/button";
 import {
 	BookmarkIcon,
 	ChevronIcon,
@@ -95,9 +96,16 @@ export function Sidebar({
 			<div className="sidebar__inner">
 				<div className="sidebar__header">
 					<span className="sidebar__brand">Fork</span>
-					<IconButton label="Close sidebar" onClick={onToggle}>
-						<SidebarIcon />
-					</IconButton>
+					<Button
+						variant="secondary"
+						size="icon-lg"
+						className="header-btn header-btn--sidebar"
+						aria-label="Close sidebar"
+						title="Close sidebar"
+						onClick={onToggle}
+					>
+						<SidebarIcon className="size-5" />
+					</Button>
 				</div>
 				<nav className="sidebar__nav" ref={navRef} aria-label="Chat history">
 					<button

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoginPage, LoginPending } from "./LoginPage";
 import { ChatPane } from "./components/ChatPane";
-import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
+import { Button } from "./components/ui/button";
 import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { UserMenu } from "./components/UserMenu";
@@ -960,12 +960,26 @@ function ChatApp({ user }: { user: AuthUser }) {
 				{/* Only worth its height when the sidebar is away and it holds the controls. */}
 				{sidebarOpen ? null : (
 					<header className="main__header">
-						<IconButton label="Open sidebar" onClick={() => setSidebarOpen(true)}>
-							<SidebarIcon />
-						</IconButton>
-						<IconButton label="New chat" onClick={newChat}>
-							<ComposeIcon />
-						</IconButton>
+						<Button
+							variant="secondary"
+							size="icon-lg"
+							className="header-btn header-btn--sidebar"
+							aria-label="Open sidebar"
+							title="Open sidebar"
+							onClick={() => setSidebarOpen(true)}
+						>
+							<SidebarIcon className="size-5" />
+						</Button>
+						<Button
+							variant="secondary"
+							size="icon-lg"
+							className="header-btn header-btn--compose"
+							aria-label="New chat"
+							title="New chat"
+							onClick={newChat}
+						>
+							<ComposeIcon className="size-5" />
+						</Button>
 						<div className="main__header-spacer" />
 						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
 					</header>
