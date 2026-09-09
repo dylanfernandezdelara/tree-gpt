@@ -118,6 +118,8 @@ describe("handleTreeRequest", () => {
 						status: "done",
 						content: "hi",
 						reasoning: null,
+						citations: null,
+						tool_calls: null,
 						created_at: 1,
 					},
 					leafRow(),

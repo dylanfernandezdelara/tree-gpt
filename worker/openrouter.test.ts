@@ -328,7 +328,14 @@ describe("handleOpenRouterRequest", () => {
 			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
 		expect(events).toEqual([
 			{ type: "content", text: "The match is underway." },
-			{ type: "done", model: "meta/muse-spark-1.3-contributor" },
+			{
+				type: "done",
+				model: "meta/muse-spark-1.3-contributor",
+				citations: [{ url: "https://example.com/", title: "Example" }],
+				toolCalls: [
+					{ id: "call_1", name: "web_search", query: "us open", state: "output-available" },
+				],
+			},
 		]);
 	});
 

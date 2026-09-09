@@ -6,9 +6,17 @@ import {
 	isEffortId,
 	isModelId,
 	isRole,
+	type Citation,
 	type EffortId,
 	type ModelId,
+	type ToolCall,
 } from "./tree-types.js";
+import {
+	createSearchAccumulator,
+	finalizeSearchMeta,
+	ingestOpenRouterPayload,
+	searchMetaFromPayload,
+} from "./search-meta.js";
 import { systemPrompt } from "./system-prompt.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -74,6 +82,8 @@ export type CompletionMessage = {
 export type Completion = {
 	model: string;
 	content: string;
+	citations?: Citation[];
+	toolCalls?: ToolCall[];
 };
 
 export type CompletionFailure = {
@@ -144,6 +154,8 @@ export async function handleOpenRouterRequest(
 		ok: true,
 		model: completion.value.model,
 		message: completion.value.content,
+		...(completion.value.citations ? { citations: completion.value.citations } : {}),
+		...(completion.value.toolCalls ? { toolCalls: completion.value.toolCalls } : {}),
 	});
 }
 
@@ -307,7 +319,7 @@ export async function requestCompletion(
 export type StreamEvent =
 	| { type: "reasoning"; text: string }
 	| { type: "content"; text: string }
-	| { type: "done"; model: string }
+	| { type: "done"; model: string; citations?: Citation[]; toolCalls?: ToolCall[] }
 	| { type: "error"; error: string };
 
 /**
@@ -458,6 +470,7 @@ function translateStream(
 	let model = fallbackModel;
 	let reasoningSent = 0;
 	let finished = false;
+	const searchAcc = createSearchAccumulator();
 
 	return new ReadableStream<UpstreamEvent>({
 		// Pump from start(), not pull(): resolving pulls without enqueueing
@@ -528,7 +541,7 @@ function translateStream(
 					}
 					buffer = "";
 				}
-				finish({ type: "done", model });
+				finish({ type: "done", model, ...finalizeSearchMeta(searchAcc) });
 			} catch {
 				if (!abort.signal.aborted) {
 					finish({ type: "error", error: "Stream interrupted" });
@@ -577,6 +590,7 @@ function translateStream(
 			if ("error" in payload) {
 				return ["upstream-error"];
 			}
+			ingestOpenRouterPayload(searchAcc, payload);
 			const delta = readDelta(payload);
 			if (!delta) {
 				continue;
@@ -788,8 +802,9 @@ function parseCompletion(payload: unknown): ParsedUpstream | null {
 	// Any reasoning_details OpenRouter returns (e.g. when `exclude` is not
 	// honored) are deliberately dropped: there is no tool loop to continue,
 	// and keeping them would only bloat the next request.
+	const search = searchMetaFromPayload(payload);
 	return {
-		completion: { model: payload.model, content },
+		completion: { model: payload.model, content, ...search },
 		finishReason,
 	};
 }

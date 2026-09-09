@@ -86,6 +86,26 @@ export const MAX_TITLE = 200;
 export const MAX_CONTENT = 8_000;
 /** Display-only thinking trace; never sent upstream. */
 export const MAX_REASONING = 4_000;
+/** Display-only search sources; never sent upstream. */
+export const MAX_CITATIONS = 8;
+/** Display-only search tool chips; never sent upstream. */
+export const MAX_STORED_TOOL_CALLS = 3;
+/** Cap on each stored search JSON column. */
+export const MAX_SEARCH_JSON = 4_000;
+
+export type Citation = {
+	url: string;
+	title?: string;
+};
+
+export type ToolCallState = "input-available" | "output-available" | "output-error";
+
+export type ToolCall = {
+	id: string;
+	name: "web_search";
+	query?: string;
+	state: ToolCallState;
+};
 /** A pending reply older than this is treated as abandoned. */
 export const PENDING_TIMEOUT_MS = 120_000;
 
@@ -96,6 +116,8 @@ export type ApiMessage = {
 	content: string;
 	createdAt: number;
 	reasoning?: string;
+	citations?: Citation[];
+	toolCalls?: ToolCall[];
 	pending?: true;
 };
 

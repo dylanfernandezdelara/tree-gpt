@@ -2,6 +2,7 @@
  * Shared read/GC primitives over the message tree. Every query here is
  * scoped by user_id; callers never see another user's rows.
  */
+import { parseStoredSearchJson, sanitizeCitations, sanitizeToolCalls } from "./search-meta.js";
 import { PENDING_TIMEOUT_MS, type ApiMessage, type ChatSummary, type Role } from "./tree-types.js";
 
 export type ChatRow = {
@@ -24,12 +25,14 @@ export type MessageRow = {
 	status: "pending" | "done";
 	content: string;
 	reasoning: string | null;
+	citations: string | null;
+	tool_calls: string | null;
 	created_at: number;
 };
 
 export const CHAT_COLUMNS = `id, user_id, root_id, leaf_id, title, created_at, updated_at`;
 
-export const MESSAGE_COLUMNS = `id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at`;
+export const MESSAGE_COLUMNS = `id, user_id, root_id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at`;
 
 export const CHAT_ROW_SQL = `SELECT ${CHAT_COLUMNS} FROM chats WHERE id = ? AND user_id = ?`;
 
@@ -40,11 +43,11 @@ export const MESSAGE_ROW_SQL = `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id
  * Consumers ORDER BY depth to get the root-to-leaf path.
  */
 export const PATH_CTE = `
-	WITH RECURSIVE path(id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at) AS (
-		SELECT id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at
+	WITH RECURSIVE path(id, user_id, root_id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at) AS (
+		SELECT id, user_id, root_id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at
 		FROM messages WHERE id = ? AND user_id = ?
 		UNION ALL
-		SELECT m.id, m.user_id, m.root_id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.created_at
+		SELECT m.id, m.user_id, m.root_id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.citations, m.tool_calls, m.created_at
 		FROM messages m JOIN path p ON m.id = p.parent_id AND m.user_id = p.user_id
 	)`;
 
@@ -115,7 +118,7 @@ export type LeafState = Pick<MessageRow, "status" | "created_at">;
 /** What toApiMessage needs from a node row. */
 export type RenderableRow = Pick<
 	MessageRow,
-	"id" | "role" | "content" | "reasoning" | "status" | "created_at"
+	"id" | "role" | "content" | "reasoning" | "citations" | "tool_calls" | "status" | "created_at"
 >;
 
 export function fail(status: number, error: string, extra?: Record<string, unknown>): Response {
@@ -222,6 +225,16 @@ export function toApiMessage(row: RenderableRow): ApiMessage {
 	};
 	if (row.role === "assistant" && row.reasoning) {
 		message.reasoning = row.reasoning;
+	}
+	if (row.role === "assistant") {
+		const citations = parseStoredSearchJson(row.citations, sanitizeCitations);
+		const toolCalls = parseStoredSearchJson(row.tool_calls, sanitizeToolCalls);
+		if (citations) {
+			message.citations = citations;
+		}
+		if (toolCalls) {
+			message.toolCalls = toolCalls;
+		}
 	}
 	if (row.status === "pending") {
 		message.pending = true;

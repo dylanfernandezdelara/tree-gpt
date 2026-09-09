@@ -516,10 +516,17 @@ function ChatApp({ user }: { user: AuthUser }) {
 		let reasoning = "";
 		let content = "";
 		const applyUpdate = (update: StreamUpdate) => {
-			if (update.type === "reasoning") {
-				reasoning += update.text;
-			} else {
-				content += update.text;
+			switch (update.type) {
+				case "reasoning":
+					reasoning += update.text;
+					break;
+				case "content":
+					content += update.text;
+					break;
+				default: {
+					const unseen: never = update;
+					void unseen;
+				}
 			}
 			const snapshot = { content, reasoning };
 			setReply(chatId, replyId, {
@@ -538,17 +545,29 @@ function ChatApp({ user }: { user: AuthUser }) {
 					content,
 					pending: false,
 					error: false,
-					...(reasoning ? { reasoning } : {}),
+					citations: result.citations ?? [],
+					toolCalls: result.toolCalls ?? [],
+					...(reasoning ? { reasoning } : { reasoning: undefined }),
 				});
 			} else if (result.ok) {
 				setReply(chatId, replyId, {
 					content: "OpenRouter returned an empty reply.",
 					pending: false,
 					error: true,
+					citations: [],
+					toolCalls: [],
+					reasoning: undefined,
 				});
 			} else {
 				const text = result.details ? `${result.error}: ${result.details}` : result.error;
-				setReply(chatId, replyId, { content: text, pending: false, error: true });
+				setReply(chatId, replyId, {
+					content: text,
+					pending: false,
+					error: true,
+					citations: [],
+					toolCalls: [],
+					reasoning: undefined,
+				});
 			}
 		} catch {
 			const action = streamFailureAction(
@@ -565,7 +584,14 @@ function ChatApp({ user }: { user: AuthUser }) {
 				}));
 				return;
 			}
-			setReply(chatId, replyId, { content: action.message, pending: false, error: true });
+			setReply(chatId, replyId, {
+				content: action.message,
+				pending: false,
+				error: true,
+				citations: [],
+				toolCalls: [],
+				reasoning: undefined,
+			});
 		} finally {
 			if (pendingRef.current.get(chatId) === controller) {
 				pendingRef.current.delete(chatId);
@@ -697,6 +723,8 @@ function ChatApp({ user }: { user: AuthUser }) {
 			pending: true,
 			error: false,
 			reasoning: undefined,
+			citations: [],
+			toolCalls: [],
 		});
 		void request(chat.id, messageId, history, config);
 	}

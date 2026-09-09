@@ -23,6 +23,7 @@ import {
 	type ChatRow,
 	type MessageRow,
 } from "./tree.js";
+import { storedSearchJson } from "./search-meta.js";
 import { parseTurnRequest, type ParsedTurn } from "./turn-request.js";
 import {
 	MAX_CHATS,
@@ -32,6 +33,8 @@ import {
 	PENDING_TIMEOUT_MS,
 	type ApiMessage,
 	type ChatSummary,
+	type Citation,
+	type ToolCall,
 	type TurnRequest,
 	type TurnStreamEvent,
 } from "./tree-types.js";
@@ -67,7 +70,12 @@ export type TurnPlan = {
 };
 
 type PersistFns = {
-	complete: (content: string, reasoning: string | null) => Promise<TurnTerminal>;
+	complete: (
+		content: string,
+		reasoning: string | null,
+		citations?: Citation[],
+		toolCalls?: ToolCall[],
+	) => Promise<TurnTerminal>;
 	abandon: (error: string, details?: string) => Promise<TurnTerminal>;
 };
 
@@ -140,8 +148,17 @@ export async function handleTurnRequest(
 	}
 
 	const persist: PersistFns = {
-		complete: async (content, reasoning) => {
-			const committed = await completeTurn(env.DB, user.id, plan.targetChatId, reserved.replyId, content, reasoning);
+		complete: async (content, reasoning, citations, toolCalls) => {
+			const committed = await completeTurn(
+				env.DB,
+				user.id,
+				plan.targetChatId,
+				reserved.replyId,
+				content,
+				reasoning,
+				citations,
+				toolCalls,
+			);
 			if (!committed.ok) {
 				return { type: "error", error: REPLY_ABANDONED };
 			}
@@ -324,8 +341,8 @@ export async function reserveTurn(
 		statements.push(
 			db
 				.prepare(
-					`INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at)
-					 SELECT ?, ?, ?, ?, ?, 'user', 'done', ?, NULL, ?
+					`INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at)
+					 SELECT ?, ?, ?, ?, ?, 'user', 'done', ?, NULL, NULL, NULL, ?
 					 WHERE ${guard.sql}`,
 				)
 				.bind(
@@ -344,8 +361,8 @@ export async function reserveTurn(
 	statements.push(
 		db
 			.prepare(
-				`INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at)
-				 SELECT ?, ?, ?, ?, ?, 'assistant', 'pending', '', NULL, ?
+				`INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at)
+				 SELECT ?, ?, ?, ?, ?, 'assistant', 'pending', '', NULL, NULL, NULL, ?
 				 WHERE ${guard.sql}`,
 			)
 			.bind(body.replyId, userId, plan.rootId, plan.replyParentId, plan.replyDepth, now, ...guard.binds),
@@ -392,6 +409,8 @@ export async function completeTurn(
 	replyId: string,
 	content: string,
 	reasoning: string | null,
+	citations?: Citation[],
+	toolCalls?: ToolCall[],
 ): Promise<{ ok: true; chat: ChatSummary; messages: ApiMessage[] } | { ok: false }> {
 	const now = Date.now();
 	const capped =
@@ -399,9 +418,16 @@ export async function completeTurn(
 	const results = await db.batch([
 		db
 			.prepare(
-				`UPDATE messages SET status = 'done', content = ?, reasoning = ? WHERE id = ? AND user_id = ? AND status = 'pending'`,
+				`UPDATE messages SET status = 'done', content = ?, reasoning = ?, citations = ?, tool_calls = ? WHERE id = ? AND user_id = ? AND status = 'pending'`,
 			)
-			.bind(content, capped, replyId, userId),
+			.bind(
+				content,
+				capped,
+				storedSearchJson(citations) ?? null,
+				storedSearchJson(toolCalls) ?? null,
+				replyId,
+				userId,
+			),
 		db
 			.prepare(
 				`UPDATE chats SET updated_at = ? WHERE id = ? AND user_id = ? AND EXISTS (SELECT 1 FROM messages WHERE id = ? AND user_id = ? AND status = 'done')`,
@@ -465,6 +491,8 @@ export async function persistFromStream(
 	try {
 		let content = "";
 		let reasoning = "";
+		let citations: Citation[] | undefined;
+		let toolCalls: ToolCall[] | undefined;
 		const reader = events.getReader();
 		try {
 			for (;;) {
@@ -474,7 +502,10 @@ export async function persistFromStream(
 				}
 				switch (value.type) {
 					case "heartbeat":
+						break;
 					case "done":
+						citations = value.citations;
+						toolCalls = value.toolCalls;
 						break;
 					case "reasoning":
 						if (reasoning.length < MAX_REASONING) {
@@ -499,7 +530,7 @@ export async function persistFromStream(
 		if (!content.trim()) {
 			return await persist.abandon("OpenRouter returned an empty reply");
 		}
-		return await persist.complete(content, reasoning || null);
+		return await persist.complete(content, reasoning || null, citations, toolCalls);
 	} catch {
 		try {
 			return await persist.abandon("Stream interrupted");

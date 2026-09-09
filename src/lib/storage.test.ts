@@ -50,12 +50,16 @@ describe("thinking-trace persistence", () => {
 			role: "assistant",
 			content: "hello",
 			createdAt: 2,
+			citations: [],
+			toolCalls: [],
 		});
 		expect(persistableFields(thinkingMessage as never)).toEqual({
 			role: "assistant",
 			content: "hi",
 			createdAt: 3,
 			reasoning: "Considering the question.",
+			citations: [],
+			toolCalls: [],
 		});
 		// User messages never carry thinking, even if present.
 		expect(
@@ -78,6 +82,25 @@ describe("thinking-trace persistence", () => {
 		expect(JSON.stringify(chat).includes("reasoningDetails")).toBe(false);
 		expect(chat.messages).toHaveLength(3);
 		expect(chat.messages[2]).toMatchObject({ reasoning: "Considering the question." });
+	});
+
+	it("keeps display-only search metadata on assistant messages", () => {
+		expect(
+			persistableFields({
+				id: "m",
+				role: "assistant",
+				content: "Alcaraz",
+				createdAt: 1,
+				citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
+				toolCalls: [{ id: "web_search", name: "web_search", state: "output-available" }],
+			}),
+		).toEqual({
+			role: "assistant",
+			content: "Alcaraz",
+			createdAt: 1,
+			citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
+			toolCalls: [{ id: "web_search", name: "web_search", state: "output-available" }],
+		});
 	});
 });
 

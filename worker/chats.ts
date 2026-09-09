@@ -19,6 +19,11 @@ import {
 	type MessageRow,
 } from "./tree.js";
 import {
+	sanitizeCitations,
+	sanitizeToolCalls,
+	storedSearchJson,
+} from "./search-meta.js";
+import {
 	MAX_CHATS,
 	MAX_CONTENT,
 	MAX_DEPTH,
@@ -48,13 +53,13 @@ export const CHATS_LIST_SQL = `
  * Bind order: (userId, userId).
  */
 export const ALL_PATHS_SQL = `
-	WITH RECURSIVE path(chat_id, id, parent_id, depth, role, status, content, reasoning, created_at) AS (
-		SELECT c.id, m.id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.created_at
+	WITH RECURSIVE path(chat_id, id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at) AS (
+		SELECT c.id, m.id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.citations, m.tool_calls, m.created_at
 		FROM chats c
 		JOIN messages m ON m.id = c.leaf_id AND m.user_id = c.user_id
 		WHERE c.user_id = ?
 		UNION ALL
-		SELECT p.chat_id, m.id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.created_at
+		SELECT p.chat_id, m.id, m.parent_id, m.depth, m.role, m.status, m.content, m.reasoning, m.citations, m.tool_calls, m.created_at
 		FROM messages m
 		JOIN path p ON m.id = p.parent_id AND m.user_id = ?
 	)
@@ -78,9 +83,7 @@ export const IS_SHARED_SQL = `
 		JOIN path p ON m.id = p.parent_id
 	)
 	SELECT EXISTS(SELECT 1 FROM path WHERE id = ?) AS shared`;
-const UPDATE_MESSAGE = `UPDATE messages SET content = ?, reasoning = ? WHERE id = ? AND user_id = ?`;
-const UPDATE_REATTACHED = `UPDATE messages SET content = ?, reasoning = ?, status = 'done' WHERE id = ? AND user_id = ?`;
-const INSERT_MESSAGE = `INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, created_at) SELECT ?, ?, ?, ?, ?, ?, 'done', ?, ?, ?`;
+const INSERT_MESSAGE = `INSERT INTO messages (id, user_id, root_id, parent_id, depth, role, status, content, reasoning, citations, tool_calls, created_at) SELECT ?, ?, ?, ?, ?, ?, 'done', ?, ?, ?, ?, ?`;
 const UPDATE_CHAT = `UPDATE chats SET leaf_id = ?, root_id = ?, title = ?, created_at = ?, updated_at = ? WHERE id = ? AND user_id = ? AND leaf_id IS ?`;
 const INSERT_CHAT = `INSERT INTO chats (id, user_id, root_id, leaf_id, title, created_at, updated_at) SELECT ?, ?, ?, ?, ?, ?, ?`;
 const DELETE_STALE_PENDING = `DELETE FROM messages WHERE id = ? AND user_id = ? AND status = 'pending'`;
@@ -104,12 +107,16 @@ type ExistingNode = {
 	role: string;
 	content: string;
 	reasoning: string | null;
+	citations: string | null;
+	tool_calls: string | null;
 };
 
 type InPlaceEdit = {
 	id: string;
 	content: string;
 	reasoning: string | null;
+	citations?: string | null;
+	toolCalls?: string | null;
 };
 
 type PathNodeRow = {
@@ -121,6 +128,8 @@ type PathNodeRow = {
 	status: "pending" | "done";
 	content: string;
 	reasoning: string | null;
+	citations: string | null;
+	tool_calls: string | null;
 	created_at: number;
 };
 
@@ -328,7 +337,7 @@ async function resolvePrefixEdits(
 		if (row === undefined || message === undefined) {
 			break;
 		}
-		if (!contentOrReasoningChanged(row, message)) {
+		if (!messageFieldsChanged(row, message)) {
 			continue;
 		}
 		if (await isShared(db, userId, row.id, chatId)) {
@@ -338,11 +347,7 @@ async function resolvePrefixEdits(
 				error: "Message is shared with another chat and cannot be edited here",
 			};
 		}
-		edits.push({
-			id: row.id,
-			content: message.content,
-			reasoning: storedReasoning(message),
-		});
+		edits.push(editFromMessage(message, row.id));
 	}
 
 	const tail = incoming.slice(k);
@@ -373,13 +378,8 @@ async function resolvePrefixEdits(
 		// Client re-sent an id that already lives on this user (typically an
 		// orphaned tail after redo-then-redo). Parent+role match: skip INSERT
 		// (avoids the PK) and UPDATE content/reasoning when they differ.
-		const nextReasoning = storedReasoning(message);
-		if (contentOrReasoningChanged(existingNode, message)) {
-			skipInsert.set(message.id, {
-				id: message.id,
-				content: message.content,
-				reasoning: nextReasoning,
-			});
+		if (messageFieldsChanged(existingNode, message)) {
+			skipInsert.set(message.id, editFromMessage(message, message.id));
 		} else {
 			skipInsert.set(message.id, null);
 		}
@@ -399,7 +399,7 @@ async function loadExistingNodes(
 	const placeholders = ids.map(() => "?").join(", ");
 	const result = await db
 		.prepare(
-			`SELECT id, parent_id, role, content, reasoning FROM messages WHERE user_id = ? AND id IN (${placeholders})`,
+			`SELECT id, parent_id, role, content, reasoning, citations, tool_calls FROM messages WHERE user_id = ? AND id IN (${placeholders})`,
 		)
 		.bind(userId, ...ids)
 		.all<ExistingNode>();
@@ -429,10 +429,9 @@ function buildReconcileBatch(
 	const guard = reconcileGuard(existing, chat.id, userId);
 
 	for (const edit of edits) {
+		const update = messageUpdate(edit, userId, false);
 		statements.push(
-			db
-				.prepare(`${UPDATE_MESSAGE} AND ${guard.sql}`)
-				.bind(edit.content, edit.reasoning, edit.id, userId, ...guard.binds),
+			db.prepare(`${update.sql} AND ${guard.sql}`).bind(...update.params, ...guard.binds),
 		);
 	}
 
@@ -450,16 +449,9 @@ function buildReconcileBatch(
 		const reattached = skipInsert.get(message.id);
 		if (skipInsert.has(message.id)) {
 			if (reattached) {
+				const update = messageUpdate(reattached, userId, true);
 				statements.push(
-					db
-						.prepare(`${UPDATE_REATTACHED} AND ${guard.sql}`)
-						.bind(
-							reattached.content,
-							reattached.reasoning,
-							reattached.id,
-							userId,
-							...guard.binds,
-						),
+					db.prepare(`${update.sql} AND ${guard.sql}`).bind(...update.params, ...guard.binds),
 				);
 			}
 			continue;
@@ -476,6 +468,8 @@ function buildReconcileBatch(
 					message.role,
 					message.content,
 					storedReasoning(message),
+					storedSearchJson(message.citations) ?? null,
+					storedSearchJson(message.toolCalls) ?? null,
 					message.createdAt,
 					...guard.binds,
 				),
@@ -546,11 +540,59 @@ function longestCommonPrefix(path: MessageRow[], incoming: ApiMessage[]): number
 	return k;
 }
 
-function contentOrReasoningChanged(
-	row: { content: string; reasoning: string | null },
-	message: { content: string; reasoning?: string },
+function messageFieldsChanged(
+	row: { content: string; reasoning: string | null; citations?: string | null; tool_calls?: string | null },
+	message: ApiMessage,
 ): boolean {
-	return row.content !== message.content || (row.reasoning ?? undefined) !== message.reasoning;
+	if (row.content !== message.content || (row.reasoning ?? undefined) !== message.reasoning) {
+		return true;
+	}
+	if (message.citations !== undefined && (row.citations ?? null) !== (storedSearchJson(message.citations) ?? null)) {
+		return true;
+	}
+	if (message.toolCalls !== undefined && (row.tool_calls ?? null) !== (storedSearchJson(message.toolCalls) ?? null)) {
+		return true;
+	}
+	return false;
+}
+
+function editFromMessage(message: ApiMessage, id: string): InPlaceEdit {
+	const edit: InPlaceEdit = {
+		id,
+		content: message.content,
+		reasoning: storedReasoning(message),
+	};
+	if (message.citations !== undefined) {
+		edit.citations = storedSearchJson(message.citations) ?? null;
+	}
+	if (message.toolCalls !== undefined) {
+		edit.toolCalls = storedSearchJson(message.toolCalls) ?? null;
+	}
+	return edit;
+}
+
+function messageUpdate(
+	edit: InPlaceEdit,
+	userId: string,
+	markDone: boolean,
+): { sql: string; params: unknown[] } {
+	const sets = ["content = ?", "reasoning = ?"];
+	const params: unknown[] = [edit.content, edit.reasoning];
+	if (edit.citations !== undefined) {
+		sets.push("citations = ?");
+		params.push(edit.citations);
+	}
+	if (edit.toolCalls !== undefined) {
+		sets.push("tool_calls = ?");
+		params.push(edit.toolCalls);
+	}
+	if (markDone) {
+		sets.push("status = 'done'");
+	}
+	return {
+		sql: `UPDATE messages SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`,
+		params: [...params, edit.id, userId],
+	};
 }
 
 function storedReasoning(message: ApiMessage): string | null {
@@ -669,6 +711,14 @@ function parseMessage(
 		item.role === "assistant" && "reasoning" in item && typeof item.reasoning === "string"
 			? item.reasoning.slice(0, MAX_REASONING)
 			: undefined;
+	const citations =
+		item.role === "assistant" && "citations" in item
+			? sanitizeCitations(item.citations)
+			: undefined;
+	const toolCalls =
+		item.role === "assistant" && ("toolCalls" in item || "tool_calls" in item)
+			? sanitizeToolCalls("toolCalls" in item ? item.toolCalls : item.tool_calls)
+			: undefined;
 	return {
 		ok: true,
 		value: {
@@ -677,6 +727,8 @@ function parseMessage(
 			content,
 			createdAt: item.createdAt,
 			...(reasoning ? { reasoning } : {}),
+			...(citations !== undefined ? { citations } : {}),
+			...(toolCalls !== undefined ? { toolCalls } : {}),
 		},
 	};
 }

@@ -1,4 +1,5 @@
-import type { EffortId, ModelId } from "../../worker/tree-types";
+import { sanitizeCitations, sanitizeToolCalls } from "../../worker/search-meta";
+import type { Citation, EffortId, ModelId, ToolCall } from "../../worker/tree-types";
 import type { Role } from "../types";
 
 export type ChatResponse =
@@ -7,10 +8,12 @@ export type ChatResponse =
 
 export type ChatTurn = { role: Role; content: string };
 
-export type StreamUpdate = { type: "reasoning" | "content"; text: string };
+export type StreamUpdate =
+	| { type: "reasoning"; text: string }
+	| { type: "content"; text: string };
 
 export type StreamResult =
-	| { ok: true; model: string }
+	| { ok: true; model: string; citations?: Citation[]; toolCalls?: ToolCall[] }
 	| { ok: false; error: string; details?: string };
 
 /**
@@ -76,6 +79,8 @@ async function consumeStream(
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let model = "";
+	let citations: Citation[] | undefined;
+	let toolCalls: ToolCall[] | undefined;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) {
@@ -89,6 +94,8 @@ async function consumeStream(
 			if (result) {
 				if (result.type === "done") {
 					model = result.model;
+					citations = result.citations;
+					toolCalls = result.toolCalls;
 				} else {
 					await reader.cancel();
 					return { ok: false, error: result.error };
@@ -97,7 +104,12 @@ async function consumeStream(
 		}
 	}
 	if (model) {
-		return { ok: true, model };
+		return {
+			ok: true,
+			model,
+			...(citations && citations.length > 0 ? { citations } : {}),
+			...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+		};
 	}
 	return { ok: false, error: "The stream ended without a reply." };
 }
@@ -105,7 +117,10 @@ async function consumeStream(
 function handleStreamFrame(
 	frame: string,
 	onUpdate: (update: StreamUpdate) => void,
-): { type: "done"; model: string } | { type: "error"; error: string } | null {
+):
+	| { type: "done"; model: string; citations?: Citation[]; toolCalls?: ToolCall[] }
+	| { type: "error"; error: string }
+	| null {
 	for (const line of frame.split("\n")) {
 		if (!line.startsWith("data:")) {
 			continue;
@@ -130,7 +145,14 @@ function handleStreamFrame(
 			continue;
 		}
 		if (event.type === "done" && "model" in event && typeof event.model === "string") {
-			return { type: "done", model: event.model };
+			const citations = "citations" in event ? sanitizeCitations(event.citations) : [];
+			const toolCalls = "toolCalls" in event ? sanitizeToolCalls(event.toolCalls) : [];
+			return {
+				type: "done",
+				model: event.model,
+				...(citations.length > 0 ? { citations } : {}),
+				...(toolCalls.length > 0 ? { toolCalls } : {}),
+			};
 		}
 		if (event.type === "error" && "error" in event && typeof event.error === "string") {
 			return { type: "error", error: event.error };
