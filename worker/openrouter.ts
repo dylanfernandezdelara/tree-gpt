@@ -13,6 +13,21 @@ import { systemPrompt } from "./system-prompt.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+/** OpenRouter server tool. Nested `parameters` — a top-level `engine` makes Muse emit client `tool_calls`. */
+export const WEB_SEARCH_TOOL = {
+	type: "openrouter:web_search",
+	parameters: {
+		engine: "exa",
+		mode: "fast",
+		max_results: 5,
+		max_uses: 3,
+		max_total_results: 10,
+		max_characters: 2000,
+	},
+} as const;
+
+export const MAX_TOOL_CALLS = 3;
+
 const MAX_TURN_CHARS = 8_000;
 const MAX_HISTORY = 50;
 const MAX_HISTORY_CHARS = 32_000;
@@ -204,6 +219,8 @@ function fetchOpenRouter(
 		messages: OpenRouterMessage[];
 		max_tokens: number;
 		reasoning: Record<string, string | number | boolean>;
+		tools: readonly [typeof WEB_SEARCH_TOOL];
+		max_tool_calls: typeof MAX_TOOL_CALLS;
 		stream?: boolean;
 		session_id?: string;
 	} = {
@@ -219,6 +236,9 @@ function fetchOpenRouter(
 		// models accept.
 		max_tokens: 4096,
 		reasoning: reasoningFor(init.model, init.stream, options?.effort),
+		tools: [WEB_SEARCH_TOOL],
+		// Top-level sibling of `tools`. Omit it and OpenRouter defaults to 30.
+		max_tool_calls: MAX_TOOL_CALLS,
 	};
 	if (init.stream) {
 		body.stream = true;
@@ -696,8 +716,8 @@ function parseMessages(
 		}
 
 		// Legacy clients (and stored chats) may still carry reasoningDetails
-		// blobs. They are accepted and dropped: plain chat never sends
-		// `tools`, so OpenRouter has no tool-use continuity to preserve and
+		// blobs. They are accepted and dropped: we send OpenRouter server
+		// tools each request but never persist or replay tool state, so
 		// echoing old thinking only slows the next reply.
 		parsed.push({ role: item.role, content });
 	}

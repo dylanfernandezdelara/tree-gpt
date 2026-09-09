@@ -2,7 +2,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleOpenRouterRequest, requestCompletion } from "./openrouter.js";
+import {
+	handleOpenRouterRequest,
+	MAX_TOOL_CALLS,
+	requestCompletion,
+	WEB_SEARCH_TOOL,
+} from "./openrouter.js";
 import { systemPrompt } from "./system-prompt.js";
 import {
 	assertWithinTtfbBudget,
@@ -85,6 +90,35 @@ describe("requestCompletion", () => {
 			error: "messages items must have role user or assistant",
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("sends pinned Exa web_search as a server tool with a top-level max_tool_calls cap", async () => {
+		fetchMock.mockResolvedValue(upstreamOk(chatPayload("hello")));
+		const result = await requestCompletion(env(), [{ role: "user", content: "hi" }]);
+		expect(result.ok).toBe(true);
+		const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(body.tools).toEqual([WEB_SEARCH_TOOL]);
+		expect(WEB_SEARCH_TOOL).toEqual({
+			type: "openrouter:web_search",
+			parameters: {
+				engine: "exa",
+				mode: "fast",
+				max_results: 5,
+				max_uses: 3,
+				max_total_results: 10,
+				max_characters: 2000,
+			},
+		});
+		expect(body.max_tool_calls).toBe(MAX_TOOL_CALLS);
+		expect(body.max_tool_calls).toBe(3);
+		expect("engine" in (body as object)).toBe(false);
+		expect(body.tool_choice).toBeUndefined();
+		expect(body.parallel_tool_calls).toBeUndefined();
+		expect(body.stream_options).toBeUndefined();
+		expect(body.search_context_size).toBeUndefined();
 	});
 
 	it("asks for minimal reasoning with the trace excluded", async () => {
@@ -258,6 +292,42 @@ describe("handleOpenRouterRequest", () => {
 			{ type: "reasoning", text: " the question" },
 			{ type: "content", text: "Hello" },
 			{ type: "content", text: " there" },
+			{ type: "done", model: "meta/muse-spark-1.3-contributor" },
+		]);
+	});
+
+	it("keeps streaming when OpenRouter emits tool_calls deltas", async () => {
+		const frames = [
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"web_search","arguments":"{\\"query\\":\\"us open\\"}"}}]}}]}\n\n`,
+			`data: {"choices":[{"delta":{"annotations":[{"type":"url_citation","url":"https://example.com","title":"Example"}]}}]}\n\n`,
+			`data: {"choices":[{"delta":{"content":"The match is underway."}}]}\n\n`,
+			`data: [DONE]\n\n`,
+		];
+		fetchMock.mockResolvedValue(new Response(frames.join(""), { status: 200 }));
+		const request = new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				message: "who played today",
+				stream: true,
+				tools: [{ type: "function", function: { name: "hack" } }],
+			}),
+		});
+
+		const response = await handleOpenRouterRequest(request, env());
+		expect(response.status).toBe(200);
+		const upstream = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(upstream.tools).toEqual([WEB_SEARCH_TOOL]);
+		expect(JSON.stringify(upstream).includes("hack")).toBe(false);
+		const events = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
+		expect(events).toEqual([
+			{ type: "content", text: "The match is underway." },
 			{ type: "done", model: "meta/muse-spark-1.3-contributor" },
 		]);
 	});

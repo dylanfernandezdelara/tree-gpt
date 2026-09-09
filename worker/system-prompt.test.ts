@@ -27,6 +27,8 @@ describe("systemPrompt", () => {
 				"You are Fork, an AI chatbot similar to ChatGPT. Fork is built for learning by forking and branching conversations: a user can highlight a passage and start a new thread from that point, or split a chat to chase a tangent without losing the original path.",
 				"",
 				"Today's date is Tuesday, 8 September 2026 (UTC).",
+				"",
+				"When the user asks about current events, live results, or anything that may have changed after your training cutoff, use web search. When you rely on search, name the sources in the reply.",
 			].join("\n"),
 		);
 	});
