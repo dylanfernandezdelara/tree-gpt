@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { GlobeIcon, LightbulbIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
 import type { Citation, Message, ToolCall } from "../types";
+import { unsquashSentences } from "../../worker/unsquash-sentences";
 import { IconButton } from "./IconButton";
 import {
 	CheckIcon,
@@ -51,13 +52,15 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 		);
 	}
 
+	const content = unsquashSentences(message.content);
+
 	if (message.pending) {
 		return (
 			<div className="turn turn--assistant" aria-busy="true" aria-live="polite">
 				<Thinking message={message} />
-				{message.content ? (
+				{content ? (
 					<div className="markdown markdown--live">
-						<Markdown remarkPlugins={remarkPlugins}>{message.content}</Markdown>
+						<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
 					</div>
 				) : null}
 			</div>
@@ -68,9 +71,9 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 		<div className="turn turn--assistant" data-message-id={message.id}>
 			<Thinking message={message} />
 			<div className="markdown">
-				<Markdown remarkPlugins={remarkPlugins}>{message.content}</Markdown>
+				<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
 			</div>
-			<AssistantActions content={message.content} isLast={isLast} onRedo={onRedo} />
+			<AssistantActions content={content} isLast={isLast} onRedo={onRedo} />
 		</div>
 	);
 }

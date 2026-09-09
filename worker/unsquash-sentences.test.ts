@@ -1,13 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { unsquashSentences } from "./unsquash-sentences.js";
+import { createContentAssembler, unsquashSentences } from "./unsquash-sentences.js";
 
-/** Same running prefix the stream uses. */
+/** Same running prefix the complete-reply path uses. */
 function appendAll(chunks: string[]): string {
 	let prefix = "";
 	for (const chunk of chunks) {
 		prefix = unsquashSentences(prefix + chunk);
 	}
 	return prefix;
+}
+
+/** Live stream: concatenating assembler deltas must match the full repair. */
+function assembleAll(chunks: string[]): { visible: string; deltas: string[] } {
+	const assembler = createContentAssembler();
+	const deltas: string[] = [];
+	for (const chunk of chunks) {
+		const delta = assembler.push(chunk);
+		if (delta.length > 0) {
+			deltas.push(delta);
+		}
+	}
+	const tail = assembler.flush();
+	if (tail.length > 0) {
+		deltas.push(tail);
+	}
+	return { visible: deltas.join(""), deltas };
 }
 
 describe("unsquashSentences", () => {
@@ -36,9 +53,77 @@ describe("unsquashSentences", () => {
 			chunks: ["Hello there.Next"],
 			want: "Hello there. Next",
 		},
+		{
+			name: "smash at the start of the reply",
+			chunks: ["Hello.World is here"],
+			want: "Hello. World is here",
+		},
+		{
+			name: "short prose word before the period",
+			chunks: ["Yes.The kickoff is tonight"],
+			want: "Yes. The kickoff is tonight",
+		},
+		{
+			name: "next sentence starts with I",
+			chunks: ["tonight's games.I think the 49ers cover"],
+			want: "tonight's games. I think the 49ers cover",
+		},
+		{
+			name: "next sentence starts with I'd",
+			chunks: ["games.I'd take the over"],
+			want: "games. I'd take the over",
+		},
+		{
+			name: "next sentence starts with A",
+			chunks: ["games.A late score decided it"],
+			want: "games. A late score decided it",
+		},
+		{
+			name: "question smash",
+			chunks: ["really?Yes it is"],
+			want: "really? Yes it is",
+		},
+		{
+			name: "single newline after a period (Muse sentence break)",
+			chunks: ["tonight's games.\nTomorrow's opener is set"],
+			want: "tonight's games. Tomorrow's opener is set",
+		},
+		{
+			name: "CRLF sentence break",
+			chunks: ["tonight's games.\r\nTomorrow's opener is set"],
+			want: "tonight's games. Tomorrow's opener is set",
+		},
+		{
+			name: "literal backslash-n after a period",
+			chunks: ["tonight's games.\\nTomorrow's opener is set"],
+			want: "tonight's games. Tomorrow's opener is set",
+		},
+		{
+			name: "blank line stays a paragraph break",
+			chunks: ["First paragraph ends here.\n\nSecond paragraph starts here."],
+			want: "First paragraph ends here.\n\nSecond paragraph starts here.",
+		},
+		{
+			name: "title/body newline is not a sentence smash",
+			chunks: [
+				"**2. Split to chase a tangent**\nFork the whole chat to explore a side-question.",
+			],
+			want: "**2. Split to chase a tangent**\nFork the whole chat to explore a side-question.",
+		},
+		{
+			name: "numbered list stays",
+			chunks: ["1. First item\n2. Second item"],
+			want: "1. First item\n2. Second item",
+		},
+		{
+			name: "fenced code is not repaired",
+			chunks: ["See this:\n\n```\nreturn games.\nTomorrow\n```\nDone."],
+			want: "See this:\n\n```\nreturn games.\nTomorrow\n```\nDone.",
+		},
 	])("$name", ({ chunks, want }) => {
 		expect(appendAll(chunks)).toBe(want);
 		expect(unsquashSentences(chunks.join(""))).toBe(want);
+		expect(assembleAll(chunks).visible).toBe(want);
 	});
 
 	it.each([
@@ -53,5 +138,28 @@ describe("unsquashSentences", () => {
 	])("leaves %s intact", (want, chunks) => {
 		expect(appendAll(chunks)).toBe(want);
 		expect(unsquashSentences(chunks.join(""))).toBe(want);
+		expect(assembleAll(chunks).visible).toBe(want);
+	});
+});
+
+describe("createContentAssembler", () => {
+	it("holds a newline after a period until the next sentence arrives", () => {
+		const { deltas, visible } = assembleAll(["tonight's games.", "\n", "Tomorrow"]);
+		expect(visible).toBe("tonight's games. Tomorrow");
+		expect(deltas.join("").includes("\n")).toBe(false);
+	});
+
+	it("releases a held newline when the next chunk is another blank line", () => {
+		expect(assembleAll(["First paragraph ends here.", "\n", "\n", "Second"]).visible).toBe(
+			"First paragraph ends here.\n\nSecond",
+		);
+	});
+
+	it("flushes a trailing newline at end of stream", () => {
+		expect(assembleAll(["games.", "\n"]).visible).toBe("games.\n");
+	});
+
+	it("forwards a newline-only chunk that is not a sentence break", () => {
+		expect(assembleAll(["**Title**", "\n", "Body"]).visible).toBe("**Title**\nBody");
 	});
 });

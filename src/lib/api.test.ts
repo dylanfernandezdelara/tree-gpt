@@ -45,6 +45,44 @@ describe("sendChatStream", () => {
 		);
 	}
 
+	it("forwards a newline-only content frame", async () => {
+		fetchMock.mockResolvedValue(
+			sseResponse(
+				`data: {"type":"content","text":"Hello."}\n\n` +
+					`data: {"type":"content","text":"\\n"}\n\n` +
+					`data: {"type":"content","text":"World"}\n\n` +
+					`data: {"type":"done","model":"meta/muse-spark-1.3-contributor"}\n\n`,
+			),
+		);
+		const updates: StreamUpdate[] = [];
+		const result = await sendChatStream(
+			[{ role: "user", content: "hi" }],
+			new AbortController().signal,
+			(update) => updates.push(update),
+		);
+		expect(result).toEqual({ ok: true, model: "meta/muse-spark-1.3-contributor" });
+		expect(updates).toEqual([
+			{ type: "content", text: "Hello." },
+			{ type: "content", text: "\n" },
+			{ type: "content", text: "World" },
+		]);
+	});
+
+	it("reads a terminal done frame left in the leftover buffer", async () => {
+		fetchMock.mockResolvedValue(
+			new Response(`data: {"type":"done","model":"openai/gpt-5.6-luna"}`, {
+				status: 200,
+				headers: { "Content-Type": "text/event-stream" },
+			}),
+		);
+		const result = await sendChatStream(
+			[{ role: "user", content: "hi" }],
+			new AbortController().signal,
+			() => {},
+		);
+		expect(result).toEqual({ ok: true, model: "openai/gpt-5.6-luna" });
+	});
+
 	it("accumulates reasoning and content, then resolves with the model", async () => {
 		fetchMock.mockResolvedValue(
 			sseResponse(

@@ -20,7 +20,7 @@ import {
 	searchMetaFromPayload,
 } from "./search-meta.js";
 import { systemPrompt } from "./system-prompt.js";
-import { unsquashSentences } from "./unsquash-sentences.js";
+import { createContentAssembler, unsquashSentences } from "./unsquash-sentences.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -481,7 +481,7 @@ function translateStream(
 	let finished = false;
 	const searchAcc = createSearchAccumulator();
 	let lastSearchFingerprint = "";
-	let emittedContent = "";
+	const contentAssembler = createContentAssembler();
 
 	return new ReadableStream<UpstreamEvent>({
 		// Pump from start(), not pull(): resolving pulls without enqueueing
@@ -496,7 +496,16 @@ function translateStream(
 			const heartbeat = () => {
 				emit({ type: "heartbeat" });
 			};
+			const flushContent = () => {
+				const tail = contentAssembler.flush();
+				if (tail.length > 0) {
+					emit({ type: "content", text: tail });
+				}
+			};
 			const finish = (event: StreamEvent) => {
+				if (event.type === "done") {
+					flushContent();
+				}
 				if (!finished) {
 					finished = true;
 					controller.enqueue(event);
@@ -620,11 +629,11 @@ function translateStream(
 					events.push({ type: "reasoning", text });
 				}
 			}
-			if (delta.content) {
-				const assembled = unsquashSentences(emittedContent + delta.content);
-				const text = assembled.slice(emittedContent.length);
-				emittedContent = assembled;
-				events.push({ type: "content", text });
+			if (delta.content !== undefined) {
+				const text = contentAssembler.push(delta.content);
+				if (text.length > 0) {
+					events.push({ type: "content", text });
+				}
 			}
 		}
 		return events;
@@ -646,9 +655,17 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 	const out: { content?: string; reasoning?: string } = {};
 	if ("content" in delta) {
 		const content = messageText(delta.content);
-		if (content) {
+		if (content !== null && content.length > 0) {
 			out.content = content;
 		}
+	}
+	if (
+		out.content === undefined &&
+		"text" in delta &&
+		typeof delta.text === "string" &&
+		delta.text.length > 0
+	) {
+		out.content = delta.text;
 	}
 	const texts: string[] = [];
 	if ("reasoning" in delta && typeof delta.reasoning === "string" && delta.reasoning) {
@@ -848,7 +865,40 @@ function toOpenRouterMessages(
 	];
 }
 
-/** OpenRouter `content`: string, null while reasoning, or text / output_text parts. */
+/** One OpenRouter content part: string, `{ text }`, `{ text: { value } }`, or a break. */
+function partText(part: unknown): string | null {
+	if (typeof part === "string") {
+		return part;
+	}
+	if (typeof part !== "object" || part === null) {
+		return null;
+	}
+	if ("text" in part) {
+		if (typeof part.text === "string") {
+			return part.text;
+		}
+		if (
+			typeof part.text === "object" &&
+			part.text !== null &&
+			"value" in part.text &&
+			typeof part.text.value === "string"
+		) {
+			return part.text.value;
+		}
+	}
+	if ("content" in part && typeof part.content === "string") {
+		return part.content;
+	}
+	if ("output_text" in part && typeof part.output_text === "string") {
+		return part.output_text;
+	}
+	if ("type" in part && typeof part.type === "string" && /break/i.test(part.type)) {
+		return "\n";
+	}
+	return null;
+}
+
+/** OpenRouter `content`: string, null while reasoning, one part, or text / output_text parts. */
 function messageText(content: unknown): string | null {
 	if (typeof content === "string") {
 		return content;
@@ -856,24 +906,15 @@ function messageText(content: unknown): string | null {
 	if (content === null || content === undefined) {
 		return "";
 	}
-	if (!Array.isArray(content)) {
-		return null;
-	}
-
-	const parts: string[] = [];
-	for (const part of content) {
-		if (typeof part === "string") {
-			parts.push(part);
-			continue;
+	if (Array.isArray(content)) {
+		const parts: string[] = [];
+		for (const part of content) {
+			const text = partText(part);
+			if (text !== null) {
+				parts.push(text);
+			}
 		}
-		if (
-			typeof part === "object" &&
-			part !== null &&
-			"text" in part &&
-			typeof part.text === "string"
-		) {
-			parts.push(part.text);
-		}
+		return parts.join("");
 	}
-	return parts.join("");
+	return partText(content);
 }
