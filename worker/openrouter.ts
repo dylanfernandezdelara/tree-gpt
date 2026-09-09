@@ -9,6 +9,7 @@ import {
 	type EffortId,
 	type ModelId,
 } from "./tree-types.js";
+import { systemPrompt } from "./system-prompt.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -207,7 +208,7 @@ function fetchOpenRouter(
 		session_id?: string;
 	} = {
 		model: init.model,
-		messages: toOpenRouterMessages(messages),
+		messages: toOpenRouterMessages(messages, Date.now()),
 		// Muse Spark still spends some of max_tokens on hidden reasoning even
 		// at "minimal". 1024 often finishes with content: null and
 		// finish_reason "length". `exclude` only hides the reasoning trace
@@ -774,12 +775,18 @@ function parseCompletion(payload: unknown): ParsedUpstream | null {
 }
 
 type OpenRouterMessage = {
-	role: CompletionRole;
+	role: "system" | CompletionRole;
 	content: string;
 };
 
-function toOpenRouterMessages(messages: readonly CompletionMessage[]): OpenRouterMessage[] {
-	return messages.map((message) => ({ role: message.role, content: message.content }));
+function toOpenRouterMessages(
+	messages: readonly CompletionMessage[],
+	now: number,
+): OpenRouterMessage[] {
+	return [
+		{ role: "system", content: systemPrompt(now) },
+		...messages.map((message) => ({ role: message.role, content: message.content })),
+	];
 }
 
 /**
