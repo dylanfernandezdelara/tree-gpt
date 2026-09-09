@@ -12,6 +12,7 @@ import {
 	type CompletionMessage,
 	type UpstreamEvent,
 } from "./openrouter.js";
+import { unsquashSentences } from "./unsquash-sentences.js";
 import {
 	fail,
 	loadChatRow,
@@ -480,7 +481,12 @@ export async function historyFor(
 	parentId: string,
 ): Promise<CompletionMessage[]> {
 	const rows = await loadPathRows(db, userId, parentId, { doneOnly: true });
-	return capHistory(rows.map((row) => ({ role: row.role, content: row.content })));
+	return capHistory(
+		rows.map((row) => ({
+			role: row.role,
+			content: row.role === "assistant" ? unsquashSentences(row.content) : row.content,
+		})),
+	);
 }
 
 /** Persistence tee branch. Accumulates deltas, then complete or abandon. Never throws. */
@@ -533,7 +539,12 @@ export async function persistFromStream(
 		if (!content.trim()) {
 			return await persist.abandon("OpenRouter returned an empty reply");
 		}
-		return await persist.complete(content, reasoning || null, citations, toolCalls);
+		return await persist.complete(
+			unsquashSentences(content),
+			reasoning || null,
+			citations,
+			toolCalls,
+		);
 	} catch {
 		try {
 			return await persist.abandon("Stream interrupted");

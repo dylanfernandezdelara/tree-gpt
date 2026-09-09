@@ -120,6 +120,51 @@ describe("unsquashSentences", () => {
 			chunks: ["See this:\n\n```\nreturn games.\nTomorrow\n```\nDone."],
 			want: "See this:\n\n```\nreturn games.\nTomorrow\n```\nDone.",
 		},
+		{
+			name: "quoted next sentence",
+			chunks: ['He stopped.\"The'],
+			want: 'He stopped. "The',
+		},
+		{
+			name: "curly-quoted next sentence",
+			chunks: ["He stopped.“The crowd roared."],
+			want: "He stopped. “The crowd roared.",
+		},
+		{
+			name: "ellipsis smash",
+			chunks: ["wait...Tomorrow"],
+			want: "wait... Tomorrow",
+		},
+		{
+			name: "unicode sentence punct and capital",
+			chunks: ["Voilà.Émile est là"],
+			want: "Voilà. Émile est là",
+		},
+		{
+			name: "We after a period does not need an I/A special case",
+			chunks: ["games.We win"],
+			want: "games. We win",
+		},
+		{
+			name: "inline code is not repaired",
+			chunks: ["Use `games.Tomorrow` in the snippet."],
+			want: "Use `games.Tomorrow` in the snippet.",
+		},
+		{
+			name: "list after a period keeps the newline",
+			chunks: ["Pick one.\n- First\n- Second"],
+			want: "Pick one.\n- First\n- Second",
+		},
+		{
+			name: "heading after a period keeps the newline",
+			chunks: ["Intro.\n# Title"],
+			want: "Intro.\n# Title",
+		},
+		{
+			name: "unicode line separator after a period",
+			chunks: ["games.\u2028Tomorrow"],
+			want: "games. Tomorrow",
+		},
 	])("$name", ({ chunks, want }) => {
 		expect(appendAll(chunks)).toBe(want);
 		expect(unsquashSentences(chunks.join(""))).toBe(want);

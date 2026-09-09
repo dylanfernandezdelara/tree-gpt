@@ -2,6 +2,7 @@ import type { ChatTurn } from "./api";
 import { newId } from "./id";
 import { persistableFields } from "./storage";
 import type { Message } from "../types";
+import { unsquashSentences } from "../../worker/unsquash-sentences";
 
 /** A user message plus the placeholder for its reply. */
 export function newExchange(content: string): { now: number; userMessage: Message; reply: Message } {
@@ -41,5 +42,8 @@ export function lastPersistedId(messages: Message[]): string | null {
 export function toTurns(messages: Message[]): ChatTurn[] {
 	return messages
 		.filter((m) => !m.pending && !m.error)
-		.map((m) => ({ role: m.role, content: m.content }));
+		.map((m) => ({
+			role: m.role,
+			content: m.role === "assistant" ? unsquashSentences(m.content) : m.content,
+		}));
 }

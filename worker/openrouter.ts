@@ -773,7 +773,10 @@ function parseMessages(
 		// blobs. They are accepted and dropped: we send OpenRouter server
 		// tools each request but never persist or replay tool state, so
 		// echoing old thinking only slows the next reply.
-		parsed.push({ role: item.role, content });
+		parsed.push({
+			role: item.role,
+			content: item.role === "assistant" ? unsquashSentences(content) : content,
+		});
 	}
 
 	return { ok: true, messages: capHistory(parsed) };
@@ -865,7 +868,9 @@ function toOpenRouterMessages(
 	];
 }
 
-/** One OpenRouter content part: string, `{ text }`, `{ text: { value } }`, or a break. */
+const TEXT_KEYS = ["text", "output_text", "content", "value"] as const;
+
+/** Any string on a text-bearing key, nested `{ text: { value } }`, or a break type. */
 function partText(part: unknown): string | null {
 	if (typeof part === "string") {
 		return part;
@@ -873,27 +878,24 @@ function partText(part: unknown): string | null {
 	if (typeof part !== "object" || part === null) {
 		return null;
 	}
-	if ("text" in part) {
-		if (typeof part.text === "string") {
-			return part.text;
-		}
-		if (
-			typeof part.text === "object" &&
-			part.text !== null &&
-			"value" in part.text &&
-			typeof part.text.value === "string"
-		) {
-			return part.text.value;
-		}
-	}
-	if ("content" in part && typeof part.content === "string") {
-		return part.content;
-	}
-	if ("output_text" in part && typeof part.output_text === "string") {
-		return part.output_text;
-	}
 	if ("type" in part && typeof part.type === "string" && /break/i.test(part.type)) {
 		return "\n";
+	}
+	const record = part as Record<string, unknown>;
+	for (const key of TEXT_KEYS) {
+		if (!(key in record)) {
+			continue;
+		}
+		const value = record[key];
+		if (typeof value === "string") {
+			return value;
+		}
+		if (typeof value === "object" && value !== null) {
+			const nested = partText(value);
+			if (nested !== null) {
+				return nested;
+			}
+		}
 	}
 	return null;
 }

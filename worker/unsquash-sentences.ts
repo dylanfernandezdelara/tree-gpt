@@ -1,50 +1,155 @@
 /**
- * OpenRouter / Muse text often arrives with a broken sentence boundary:
+ * OpenRouter often joins the next sentence without a gap: smash
+ * (`games.Tomorrow`), a single newline (`games.\nTomorrow`), or a literal
+ * two-character `\n`. remark-breaks then paints `<br>`, so the period
+ * looks glued to the next word.
  *
- * - smash: "games.Tomorrow" (no space after `.` / `!` / `?`)
- * - a single newline instead of a space: "games.\nTomorrow"
- * - a literal two-character `\n` after punct (JSON-ish model output)
- *
- * A single newline after a period is still a newline — remark-breaks then
- * paints `<br>`, so the UI shows the next sentence glued to the period.
- * Collapse that one break to a space. Blank lines (`\n\n`) stay paragraphs.
- * `**Title**\nBody` has no sentence punct before the break, so it stays
- * (see Message.tsx / remark-breaks).
- *
- * Only fire on a prose word smash: 2+ letters after a boundary, then punct,
- * then a sentence start (`Tomorrow`, `I `, `I'd`, `A `). Leaves `U.S.`,
- * `Ph.D`, `user.ID`, `foo.Bar()`, and query URLs alone.
- *
- * Inserts/collapses only at the punct — already-emitted prefixes stay a
- * prefix of the repaired string so the stream can slice deltas safely.
+ * Earlier repairs listed specific word shapes and kept missing the next
+ * one. This walks prose (not fenced/inline code) and inserts a space when
+ * sentence punct meets a sentence start with no real gap — any language
+ * that uses uppercase, any quote, any of `.?!…。！？`.
  */
 
-const AFTER_PROSE = String.raw`(?<=(?:^|[\s"'“”])[A-Za-z]{2,})`;
-const SENTENCE_START = String.raw`(?=[A-Z][a-z]+(?:[\s']|$)|I(?:[\s']|$)|A\s)`;
+const SENTENCE_PUNCT = /[.!?…。！？]/u;
+const LOWER = /\p{Ll}/u;
+const UPPER = /\p{Lu}/u;
+const OPEN_QUOTE = /["“”«»‘’']/;
+const CODE_SPLIT = /(```[\s\S]*?```|`[^`]+`)/g;
+const LITERAL_NL = /\\r\\n|\\n|\\r/g;
 
-const LITERAL_NL = /(?<=[.!?])\\n/g;
-const SENTENCE_NL = new RegExp(
-	`${AFTER_PROSE}([.!?])\\r?\\n(?!\\r?\\n)${SENTENCE_START}`,
-	"g",
-);
-const SMASH = new RegExp(`${AFTER_PROSE}([.!?])${SENTENCE_START}`, "g");
+function isLineBreak(ch: string | undefined): boolean {
+	return ch === "\n" || ch === "\r" || ch === "\u2028";
+}
+
+function isParagraphBreak(ch: string | undefined): boolean {
+	return ch === "\u2029";
+}
+
+function unescapeLiteralNewlines(text: string): string {
+	return text.replace(LITERAL_NL, "\n");
+}
+
+/** 2+ letter word before punct, not a digit / URL / email. `U.` and `1.` stay. */
+function looksLikeSentenceEnd(out: string): boolean {
+	const before = out.slice(0, -1).replace(/[.]{2,}$/u, "");
+	if (/(?:https?:\/\/|www\.)\S*$/i.test(before) || /\S+@\S*$/.test(before)) {
+		return false;
+	}
+	if (/\d$/u.test(before)) {
+		return false;
+	}
+	const word = before.match(/\p{L}+$/u);
+	return word !== null && word[0].length >= 2;
+}
+
+/** `#`, `- `, `1. ` after a newline — keep the break for markdown. */
+function isMarkdownBlockStart(rest: string): boolean {
+	return /^(?:#{1,6}\s|[-*+]\s|\d+\.\s|>\s|\||```)/u.test(rest);
+}
+
+/**
+ * Next token reads as a new sentence, not `ID`, `Bar()`, or `OpenAI.com`.
+ * Opening quotes are skipped so `said."The` counts.
+ */
+function looksLikeSentenceStart(rest: string): boolean {
+	let i = 0;
+	while (i < rest.length && OPEN_QUOTE.test(rest[i] ?? "")) {
+		i += 1;
+	}
+	const start = rest.slice(i);
+	const first = start[0];
+	if (!first || !UPPER.test(first)) {
+		return false;
+	}
+	const after = start.slice(1);
+	const next = after[0] ?? "";
+	if (/['’]/u.test(next)) {
+		return true;
+	}
+	if (LOWER.test(next)) {
+		const word = after.match(/^[\p{Ll}\p{M}'’]*/u)?.[0] ?? "";
+		const trail = after.slice(word.length)[0] ?? "";
+		return trail !== "(" && trail !== "." && trail !== "@";
+	}
+	// Single-letter sentence (`I `, `A `, `O `) — not `ID` / `Ph.D`.
+	return /[IAO]/u.test(first) && (next === "" || /\s/u.test(next));
+}
+
+function isIdentifierOrUrl(rest: string): boolean {
+	if (/^[\p{L}\p{N}_$]*\(/u.test(rest)) {
+		return true;
+	}
+	if (/^\p{Lu}{2}/u.test(rest)) {
+		return true;
+	}
+	if (rest.includes("@")) {
+		return true;
+	}
+	return /^[\p{L}\p{N}]*\./u.test(rest);
+}
+
+function readBreak(text: string, index: number): { length: number; paragraph: boolean } | null {
+	const ch = text[index];
+	if (isParagraphBreak(ch)) {
+		return { length: 1, paragraph: true };
+	}
+	if (text.startsWith("\r\n", index)) {
+		const next = text[index + 2];
+		return { length: 2, paragraph: isLineBreak(next) || isParagraphBreak(next) };
+	}
+	if (isLineBreak(ch)) {
+		const next = text[index + 1];
+		return { length: 1, paragraph: isLineBreak(next) || isParagraphBreak(next) };
+	}
+	return null;
+}
 
 function repairProse(text: string): string {
-	return text.replace(LITERAL_NL, "\n").replace(SENTENCE_NL, "$1 ").replace(SMASH, "$1 ");
+	const src = unescapeLiteralNewlines(text);
+	let out = "";
+	let i = 0;
+	while (i < src.length) {
+		const ch = src[i] ?? "";
+		out += ch;
+		i += 1;
+		if (!SENTENCE_PUNCT.test(ch)) {
+			continue;
+		}
+		if (ch === ".") {
+			while (src[i] === ".") {
+				out += ".";
+				i += 1;
+			}
+		}
+		if (!looksLikeSentenceEnd(out)) {
+			continue;
+		}
+		const brk = readBreak(src, i);
+		if (brk?.paragraph) {
+			continue;
+		}
+		const rest = src.slice(i + (brk?.length ?? 0));
+		if (isMarkdownBlockStart(rest) || !looksLikeSentenceStart(rest) || isIdentifierOrUrl(rest)) {
+			continue;
+		}
+		if (brk) {
+			i += brk.length;
+		}
+		out += " ";
+	}
+	return out;
 }
 
 export function unsquashSentences(text: string): string {
-	// Leave fenced code alone — `games.\nTomorrow` and `foo.Bar` are real there.
 	return text
-		.split(/(```[\s\S]*?```)/g)
+		.split(CODE_SPLIT)
 		.map((segment, index) => (index % 2 === 1 ? segment : repairProse(segment)))
 		.join("");
 }
 
 /**
- * Stream assembler: hold a trailing newline after sentence punct (and a
- * trailing `\`) until the next chunk says whether it is a smash, a
- * paragraph, or a real line break. Concatenating push() + flush() equals
+ * Hold a trailing sentence break (and a dangling `\`) until the next chunk
+ * says smash vs paragraph vs markdown. push()+flush() equals
  * unsquashSentences of the raw text.
  */
 export function createContentAssembler(): {
@@ -58,7 +163,7 @@ export function createContentAssembler(): {
 		if (text.endsWith("\\")) {
 			return text.length - 1;
 		}
-		const trailing = text.match(/[.!?](?:\r\n|\n|\r)+$/);
+		const trailing = text.match(/[.!?…。！？](?:\r\n|[\n\r\u2028])+$/u);
 		if (trailing) {
 			return text.length - trailing[0].length + 1;
 		}
