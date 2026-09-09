@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Message } from "../types";
+import type { Citation, Message, ToolCall } from "../types";
+import { Source, Sources, SourcesContent, SourcesTrigger } from "./ai-elements/sources";
+import { Tool, ToolContent, ToolHeader, ToolInput } from "./ai-elements/tool";
 import { IconButton } from "./IconButton";
 import {
 	CheckIcon,
@@ -65,11 +67,53 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 					<p className="thinking__text">{message.reasoning}</p>
 				</details>
 			) : null}
+			<SearchTools toolCalls={message.toolCalls} />
 			<div className="markdown">
 				<Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
 			</div>
+			<SearchSources citations={message.citations} />
 			<AssistantActions content={message.content} isLast={isLast} onRedo={onRedo} />
 		</div>
+	);
+}
+
+function SearchTools({ toolCalls }: { toolCalls: ToolCall[] | undefined }) {
+	if (!toolCalls || toolCalls.length === 0) {
+		return null;
+	}
+	return (
+		<div className="search-tools">
+			{toolCalls.map((call) => (
+				<Tool key={call.id} className="search-tool" defaultOpen={Boolean(call.query)}>
+					<ToolHeader type="tool-web_search" state={call.state} title="Web search" />
+					{call.query ? (
+						<ToolContent>
+							<ToolInput input={{ query: call.query }} />
+						</ToolContent>
+					) : null}
+				</Tool>
+			))}
+		</div>
+	);
+}
+
+function SearchSources({ citations }: { citations: Citation[] | undefined }) {
+	if (!citations || citations.length === 0) {
+		return null;
+	}
+	return (
+		<Sources className="search-sources">
+			<SourcesTrigger count={citations.length} />
+			<SourcesContent>
+				{citations.map((citation) => (
+					<Source
+						key={citation.url}
+						href={citation.url}
+						title={citation.title ?? citation.url}
+					/>
+				))}
+			</SourcesContent>
+		</Sources>
 	);
 }
 
