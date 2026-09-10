@@ -131,7 +131,7 @@ function loadUi(): UiState {
 		}),
 	) as Record<ModelId, EffortId>;
 	return {
-		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : true,
+		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : false,
 		activeChatId: active,
 		layout,
 		model: isModelId(record.model) ? record.model : DEFAULT_MODEL,

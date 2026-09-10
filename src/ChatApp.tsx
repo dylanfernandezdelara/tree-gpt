@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BookmarksView } from "./components/BookmarksView";
 import { ChatPane } from "./components/ChatPane";
-import { ComposeIcon, SidebarIcon } from "./components/Icons";
-import { Button } from "./components/ui/button";
+import { MainHeader } from "./components/MainHeader";
 import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
-import { UserMenu } from "./components/UserMenu";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { copyMessages, lastPersistedId, newExchange, toTurns } from "./lib/chat-turns";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
@@ -74,6 +72,7 @@ const NO_BOOKMARKS: Bookmark[] = [];
 export default function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
+	const mainRef = useRef<HTMLElement>(null);
 	const [model, setModel] = useState(loadSelectedModel);
 	/** Reasoning effort per model. Each model remembers its own setting. */
 	const [efforts, setEfforts] = useState(loadModelEfforts);
@@ -907,33 +906,16 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 					setReloadToken((n) => n + 1);
 				}}
 			/>
-			<main className="main">
+			<main className="main" ref={mainRef}>
 				{/* Only worth its height when the sidebar is away and it holds the controls. */}
 				{sidebarOpen ? null : (
-					<header className="main__header">
-						<Button
-							variant="secondary"
-							size="icon-lg"
-							className="rounded-full shadow-sm max-[768px]:size-12"
-							aria-label="Open sidebar"
-							title="Open sidebar"
-							onClick={() => setSidebarOpen(true)}
-						>
-							<SidebarIcon className="size-5" />
-						</Button>
-						<Button
-							variant="secondary"
-							size="icon-lg"
-							className="rounded-[14px] shadow-sm max-[768px]:size-12 max-[768px]:order-2"
-							aria-label="New chat"
-							title="New chat"
-							onClick={newChat}
-						>
-							<ComposeIcon className="size-5" />
-						</Button>
-						<div className="main__header-spacer" />
-						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
-					</header>
+					<MainHeader
+						scrollRoot={mainRef}
+						onOpenSidebar={() => setSidebarOpen(true)}
+						onNewChat={newChat}
+						user={user}
+						onLogOut={logOut}
+					/>
 				)}
 				<div className="main__body">
 					{view === "bookmarks" ? (

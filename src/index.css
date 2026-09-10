@@ -461,7 +461,7 @@ textarea {
 	line-height: 20px;
 	color: var(--text-secondary);
 	cursor: grab;
-	transition: background 0.12s ease;
+	transition: background 0.12s ease, top 0.25s ease;
 }
 
 /*
@@ -935,6 +935,10 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.user-button--compact {
+		transition: none;
+	}
+
 	.cot-enter {
 		animation: none;
 	}
@@ -1318,9 +1322,63 @@ textarea {
 		--header-height: 68px;
 	}
 
+	.main {
+		position: relative;
+	}
+
 	.main__header {
+		position: absolute;
+		top: 0;
+		right: 0;
+		left: 0;
+		z-index: 20;
 		gap: 10px;
 		padding: 10px 12px;
+		background: var(--surface-main);
+		transition: transform 0.25s ease;
+	}
+
+	.main__header--hidden {
+		transform: translateY(-100%);
+		pointer-events: none;
+	}
+
+	.main__header::after {
+		content: "";
+		position: absolute;
+		top: 100%;
+		right: 0;
+		left: 0;
+		height: 16px;
+		pointer-events: none;
+		background: linear-gradient(to bottom, var(--surface-main), transparent);
+	}
+
+	/* Overlay chrome is out of flow. Only pad when that header is mounted. */
+	.main:has(.main__header) {
+		--chrome-offset: var(--header-height);
+	}
+
+	.thread__inner {
+		padding-top: calc(12px + var(--header-inset) + var(--chrome-offset, 0px));
+	}
+
+	.empty {
+		padding-top: calc(var(--header-inset) + var(--chrome-offset, 0px) + 16px);
+	}
+
+	.bookmarks__header {
+		padding-top: calc(16px + var(--chrome-offset, 0px));
+	}
+
+	.main:has(.main__header) .pane__header,
+	.main:has(.main__header) .pane--headed .thread-top-fade {
+		top: var(--header-height);
+	}
+
+	.main:has(.main__header--hidden) .pane__header,
+	.main:has(.main__header--hidden) .pane--headed .thread-top-fade {
+		top: 0;
 	}
 
 	.sidebar__header {
@@ -1338,6 +1396,13 @@ textarea {
 	.main__header .user-button--compact {
 		width: 48px;
 		height: 48px;
+	}
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+	.main__header,
+	.pane__header {
+		transition: none;
 	}
 }
 
@@ -1545,6 +1610,11 @@ textarea {
 	padding: 2px;
 	border-radius: 50%;
 	justify-content: center;
+	transition: transform 150ms ease;
+}
+
+.user-button--compact:active {
+	transform: scale(0.95);
 }
 
 .user-button__text {
