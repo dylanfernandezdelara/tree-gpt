@@ -42,6 +42,7 @@ export function useHideOnScroll(root: RefObject<HTMLElement | null>): boolean {
 					hidden: hiddenNow,
 					y,
 					lastY,
+					maxY: Math.max(0, event.target.scrollHeight - event.target.clientHeight),
 					mobile: mq.matches,
 				}),
 			);

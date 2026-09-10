@@ -461,7 +461,7 @@ textarea {
 	line-height: 20px;
 	color: var(--text-secondary);
 	cursor: grab;
-	transition: background 0.12s ease;
+	transition: background 0.12s ease, top 0.25s ease;
 }
 
 /*
@@ -1354,17 +1354,31 @@ textarea {
 		background: linear-gradient(to bottom, var(--surface-main), transparent);
 	}
 
-	/* Overlay chrome: the header is out of flow, so each surface reserves its height. */
+	/* Overlay chrome is out of flow. Only pad when that header is mounted. */
+	.main:has(.main__header) {
+		--chrome-offset: var(--header-height);
+	}
+
 	.thread__inner {
-		padding-top: calc(12px + var(--header-inset) + var(--header-height));
+		padding-top: calc(12px + var(--header-inset) + var(--chrome-offset, 0px));
 	}
 
 	.empty {
-		padding-top: calc(var(--header-inset) + var(--header-height) + 16px);
+		padding-top: calc(var(--header-inset) + var(--chrome-offset, 0px) + 16px);
 	}
 
 	.bookmarks__header {
-		padding-top: calc(16px + var(--header-height));
+		padding-top: calc(16px + var(--chrome-offset, 0px));
+	}
+
+	.main:has(.main__header) .pane__header,
+	.main:has(.main__header) .pane--headed .thread-top-fade {
+		top: var(--header-height);
+	}
+
+	.main:has(.main__header--hidden) .pane__header,
+	.main:has(.main__header--hidden) .pane--headed .thread-top-fade {
+		top: 0;
 	}
 
 	.sidebar__header {
@@ -1386,7 +1400,8 @@ textarea {
 }
 
 @media (max-width: 768px) and (prefers-reduced-motion: reduce) {
-	.main__header {
+	.main__header,
+	.pane__header {
 		transition: none;
 	}
 }
