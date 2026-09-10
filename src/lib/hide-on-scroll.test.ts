@@ -21,6 +21,7 @@ describe("nextChromeHidden", () => {
 
 	it("ignores programmatic jumps and finger jitter", () => {
 		expect(nextChromeHidden({ hidden: false, y: 800, lastY: 0, mobile: true })).toBe(false);
+		expect(nextChromeHidden({ hidden: true, y: 800, lastY: 0, mobile: true })).toBe(true);
 		expect(nextChromeHidden({ hidden: false, y: 22, lastY: 20, mobile: true })).toBe(false);
 	});
 

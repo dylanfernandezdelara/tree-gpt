@@ -1,4 +1,5 @@
-const MOBILE_QUERY = "(max-width: 768px)";
+/** Must match `@media (max-width: 768px)` in `src/index.css`. */
+export const MOBILE_CHROME_QUERY = "(max-width: 768px)";
 /** Ignore tiny jitter from finger noise. */
 const DELTA = 8;
 /** Always show chrome when the reader is at the top. */
@@ -36,8 +37,4 @@ export function nextChromeHidden(args: {
 		return false;
 	}
 	return args.hidden;
-}
-
-export function mobileChromeQuery(): string {
-	return MOBILE_QUERY;
 }

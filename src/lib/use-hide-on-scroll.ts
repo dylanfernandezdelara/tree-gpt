@@ -1,24 +1,19 @@
 import { useEffect, useState, type RefObject } from "react";
-import { isScrollSurface, mobileChromeQuery, nextChromeHidden } from "./hide-on-scroll";
+import { isScrollSurface, MOBILE_CHROME_QUERY, nextChromeHidden } from "./hide-on-scroll";
 
 /**
  * Hide mobile header chrome while the conversation (or bookmarks list)
  * scrolls down; show it again on scroll up. Desktop never hides.
  */
-export function useHideOnScroll(root: RefObject<HTMLElement | null>, resetKey = false): boolean {
+export function useHideOnScroll(root: RefObject<HTMLElement | null>): boolean {
 	const [hidden, setHidden] = useState(false);
-	const [seenKey, setSeenKey] = useState(resetKey);
-	if (seenKey !== resetKey) {
-		setSeenKey(resetKey);
-		setHidden(false);
-	}
 
 	useEffect(() => {
 		const element = root.current;
 		if (!element) {
 			return;
 		}
-		const mq = window.matchMedia(mobileChromeQuery());
+		const mq = window.matchMedia(MOBILE_CHROME_QUERY);
 		let lastTarget: EventTarget | null = null;
 		let lastY = 0;
 		let hiddenNow = false;
@@ -42,14 +37,15 @@ export function useHideOnScroll(root: RefObject<HTMLElement | null>, resetKey = 
 				apply(false);
 				return;
 			}
-			const next = nextChromeHidden({
-				hidden: hiddenNow,
-				y,
-				lastY,
-				mobile: mq.matches,
-			});
+			apply(
+				nextChromeHidden({
+					hidden: hiddenNow,
+					y,
+					lastY,
+					mobile: mq.matches,
+				}),
+			);
 			lastY = y;
-			apply(next);
 		}
 
 		function onMq() {
@@ -64,7 +60,7 @@ export function useHideOnScroll(root: RefObject<HTMLElement | null>, resetKey = 
 			element.removeEventListener("scroll", onScroll, true);
 			mq.removeEventListener("change", onMq);
 		};
-	}, [root, resetKey]);
+	}, [root]);
 
 	return hidden;
 }

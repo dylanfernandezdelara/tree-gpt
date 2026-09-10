@@ -935,7 +935,6 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.main__header,
 	.user-button--compact {
 		transition: none;
 	}
@@ -1355,6 +1354,7 @@ textarea {
 		background: linear-gradient(to bottom, var(--surface-main), transparent);
 	}
 
+	/* Overlay chrome: the header is out of flow, so each surface reserves its height. */
 	.thread__inner {
 		padding-top: calc(12px + var(--header-inset) + var(--header-height));
 	}
@@ -1382,6 +1382,12 @@ textarea {
 	.main__header .user-button--compact {
 		width: 48px;
 		height: 48px;
+	}
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+	.main__header {
+		transition: none;
 	}
 }
 
