@@ -55,12 +55,17 @@ describe("unsquashSentences", () => {
 		},
 		{
 			name: "smash at the start of the reply",
-			chunks: ["Hello.World is here"],
-			want: "Hello. World is here",
+			chunks: ["hello.World is here"],
+			want: "hello. World is here",
 		},
 		{
 			name: "short prose word before the period",
-			chunks: ["Yes.The kickoff is tonight"],
+			chunks: ["yes.The kickoff is tonight"],
+			want: "yes. The kickoff is tonight",
+		},
+		{
+			name: "capitalized sentence plus newline smash",
+			chunks: ["Yes.\nThe kickoff is tonight"],
 			want: "Yes. The kickoff is tonight",
 		},
 		{
@@ -137,8 +142,8 @@ describe("unsquashSentences", () => {
 		},
 		{
 			name: "unicode sentence punct and capital",
-			chunks: ["Voilà.Émile est là"],
-			want: "Voilà. Émile est là",
+			chunks: ["voilà.Émile est là"],
+			want: "voilà. Émile est là",
 		},
 		{
 			name: "We after a period does not need an I/A special case",
@@ -165,6 +170,48 @@ describe("unsquashSentences", () => {
 			chunks: ["games.\u2028Tomorrow"],
 			want: "games. Tomorrow",
 		},
+		{
+			name: "later email does not disable the smash repair",
+			chunks: [
+				"tonight's games.\nTomorrow's opener is set. Email me at pat@example.com",
+			],
+			want: "tonight's games. Tomorrow's opener is set. Email me at pat@example.com",
+		},
+		{
+			name: "later @mention does not disable the smash repair",
+			chunks: ["tonight's games.Tomorrow I'll ping @alice"],
+			want: "tonight's games. Tomorrow I'll ping @alice",
+		},
+		{
+			name: "one-word next sentence ending in a period",
+			chunks: ["tonight's games.Yes."],
+			want: "tonight's games. Yes.",
+		},
+		{
+			name: "one-word next sentence after a newline",
+			chunks: ["tonight's games.\nYes."],
+			want: "tonight's games. Yes.",
+		},
+		{
+			name: "Windows path is not unescaped",
+			chunks: ["Save it to C:\\new\\app.tsx"],
+			want: "Save it to C:\\new\\app.tsx",
+		},
+		{
+			name: "prose backslash-n explanation is not unescaped",
+			chunks: ["Use \\n to insert a newline in the string."],
+			want: "Use \\n to insert a newline in the string.",
+		},
+		{
+			name: "PascalCase type after a period stays one identifier",
+			chunks: ["extends React.Component"],
+			want: "extends React.Component",
+		},
+		{
+			name: "unclosed fence is left raw",
+			chunks: ["```\nconst x = games.Tomorrow more\n"],
+			want: "```\nconst x = games.Tomorrow more\n",
+		},
 	])("$name", ({ chunks, want }) => {
 		expect(appendAll(chunks)).toBe(want);
 		expect(unsquashSentences(chunks.join(""))).toBe(want);
@@ -180,6 +227,10 @@ describe("unsquashSentences", () => {
 		["www.OpenAI.com", ["www.OpenAI.com"]],
 		["https://x.com/search?Q=test", ["https://x.com/search?Q=test"]],
 		["name.Surname@x.com", ["name.Surname@x.com"]],
+		["React.Component", ["React.Component"]],
+		["Math.Max", ["Math.Max"]],
+		["std.String", ["std.String"]],
+		["user.Name", ["user.Name"]],
 	])("leaves %s intact", (want, chunks) => {
 		expect(appendAll(chunks)).toBe(want);
 		expect(unsquashSentences(chunks.join(""))).toBe(want);
@@ -206,5 +257,23 @@ describe("createContentAssembler", () => {
 
 	it("forwards a newline-only chunk that is not a sentence break", () => {
 		expect(assembleAll(["**Title**", "\n", "Body"]).visible).toBe("**Title**\nBody");
+	});
+
+	it("holds a lone capital after a period so the next letters can join", () => {
+		const { deltas, visible } = assembleAll(["games.", "T", "omorrow"]);
+		expect(visible).toBe("games. Tomorrow");
+		expect(deltas.join("")).toBe("games. Tomorrow");
+	});
+
+	it("does not repair smash inside an unclosed fence that later closes", () => {
+		expect(assembleAll(["```\nconst x = games.", "Tomorrow more\n", "```\nDone."]).visible).toBe(
+			"```\nconst x = games.Tomorrow more\n```\nDone.",
+		);
+	});
+
+	it("does not repair smash inside unclosed inline code that later closes", () => {
+		expect(assembleAll(["Use `", "games.Tomorrow", "` please."]).visible).toBe(
+			"Use `games.Tomorrow` please.",
+		);
 	});
 });

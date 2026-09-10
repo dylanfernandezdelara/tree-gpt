@@ -389,7 +389,7 @@ describe("handleOpenRouterRequest", () => {
 
 	it("reads delta.text when content is absent", async () => {
 		const frames = [
-			`data: {"choices":[{"delta":{"text":"Hello.World"}}]}\n\n`,
+			`data: {"choices":[{"delta":{"text":"hello.World"}}]}\n\n`,
 			`data: [DONE]\n\n`,
 		];
 		fetchMock.mockResolvedValue(new Response(frames.join(""), { status: 200 }));
@@ -406,7 +406,7 @@ describe("handleOpenRouterRequest", () => {
 			.filter((event) => event.type === "content")
 			.map((event) => String(event.text))
 			.join("");
-		expect(content).toBe("Hello. World");
+		expect(content).toBe("hello. World");
 	});
 
 	it("keeps streaming when OpenRouter emits tool_calls deltas", async () => {
