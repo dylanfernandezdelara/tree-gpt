@@ -176,6 +176,10 @@ describe("model preference", () => {
 		expect(loadSelectedModel()).toBe("meta/muse-spark-1.3-contributor");
 	});
 
+	it("defaults the sidebar to closed", () => {
+		expect(loadSidebarOpen()).toBe(false);
+	});
+
 	it("round-trips each allowlisted model", () => {
 		for (const model of ["meta/muse-spark-1.3-contributor", "openai/gpt-5.6-luna"] as const) {
 			saveSelectedModel(model);
