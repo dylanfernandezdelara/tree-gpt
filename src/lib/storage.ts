@@ -8,6 +8,7 @@ import {
 	type EffortId,
 	type ModelId,
 } from "../../worker/tree-types";
+import { completionContent } from "../../worker/unsquash-sentences";
 import type { Bookmark, Chat, ForkOrigin, Message } from "../types";
 import { createPane, listPanes, validateLayout, type LayoutNode } from "./layout";
 
@@ -301,10 +302,23 @@ export function saveLayout(namespace: string, root: LayoutNode, focusedPaneId: s
 	writeJson(UI_KEY, { ...ui, layout: { ...ui.layout, [namespace]: { root, focusedPaneId } } });
 }
 
+function hydrateChat(chat: Chat): Chat {
+	let changed = false;
+	const messages = chat.messages.map((message) => {
+		const content = completionContent(message.role, message.content);
+		if (content === message.content) {
+			return message;
+		}
+		changed = true;
+		return { ...message, content };
+	});
+	return changed ? { ...chat, messages } : chat;
+}
+
 export function loadLocalChats(namespace: string): Chat[] {
 	const parsed = readJson(chatsKey(namespace));
 	return Array.isArray(parsed)
-		? parsed.filter(isChat).map(dropTransient).map(orderMessages)
+		? parsed.filter(isChat).map(dropTransient).map(orderMessages).map(hydrateChat)
 		: [];
 }
 

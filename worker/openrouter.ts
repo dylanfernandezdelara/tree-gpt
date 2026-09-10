@@ -659,13 +659,11 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 			out.content = content;
 		}
 	}
-	if (
-		out.content === undefined &&
-		"text" in delta &&
-		typeof delta.text === "string" &&
-		delta.text.length > 0
-	) {
-		out.content = delta.text;
+	if (out.content === undefined && "text" in delta) {
+		const content = messageText(delta.text);
+		if (content !== null && content.length > 0) {
+			out.content = content;
+		}
 	}
 	const texts: string[] = [];
 	if ("reasoning" in delta && typeof delta.reasoning === "string" && delta.reasoning) {
@@ -775,7 +773,7 @@ function parseMessages(
 		// echoing old thinking only slows the next reply.
 		parsed.push({
 			role: item.role,
-			content: item.role === "assistant" ? unsquashSentences(content) : content,
+			content,
 		});
 	}
 
@@ -868,9 +866,18 @@ function toOpenRouterMessages(
 	];
 }
 
-const TEXT_KEYS = ["text", "output_text", "content", "value"] as const;
+/** `text` / `{ value }` — the OpenRouter and Responses shapes we have seen. */
+function textField(value: unknown): string | null {
+	if (typeof value === "string") {
+		return value;
+	}
+	if (typeof value === "object" && value !== null && "value" in value && typeof value.value === "string") {
+		return value.value;
+	}
+	return null;
+}
 
-/** Any string on a text-bearing key, nested `{ text: { value } }`, or a break type. */
+/** String part, `{ text }`, `{ text: { value } }`, or `{ type: "output_text", text }`. */
 function partText(part: unknown): string | null {
 	if (typeof part === "string") {
 		return part;
@@ -878,24 +885,14 @@ function partText(part: unknown): string | null {
 	if (typeof part !== "object" || part === null) {
 		return null;
 	}
-	if ("type" in part && typeof part.type === "string" && /break/i.test(part.type)) {
-		return "\n";
+	if ("text" in part) {
+		const text = textField(part.text);
+		if (text !== null) {
+			return text;
+		}
 	}
-	const record = part as Record<string, unknown>;
-	for (const key of TEXT_KEYS) {
-		if (!(key in record)) {
-			continue;
-		}
-		const value = record[key];
-		if (typeof value === "string") {
-			return value;
-		}
-		if (typeof value === "object" && value !== null) {
-			const nested = partText(value);
-			if (nested !== null) {
-				return nested;
-			}
-		}
+	if ("output_text" in part) {
+		return textField(part.output_text);
 	}
 	return null;
 }

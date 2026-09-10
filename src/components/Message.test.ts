@@ -165,12 +165,12 @@ describe("MessageView chain of thought", () => {
 		expect(html.indexOf(">Thought<")).toBeLessThan(html.indexOf("Carlos Alcaraz won."));
 	});
 
-	it("turns a sentence-ending newline into a space so the period is not glued to the next word", () => {
+	it("renders hydrated sentence spacing without a hard break after the period", () => {
 		const html = render({
 			id: "m4",
 			role: "assistant",
 			createdAt: 4,
-			content: "tonight's games.\nTomorrow's opener is set.",
+			content: "tonight's games. Tomorrow's opener is set.",
 		});
 		expect(html).toContain("games. Tomorrow");
 		expect(html).not.toMatch(/games\.<\/p>|<br\s*\/?>\s*Tomorrow/);

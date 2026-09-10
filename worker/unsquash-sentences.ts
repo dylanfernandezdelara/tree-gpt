@@ -97,14 +97,23 @@ function isMarkdownBlockStart(rest: string): boolean {
 }
 
 /**
- * Next token reads as a new sentence, not `ID`, `Bar()`, or `OpenAI.com`.
- * Opening quotes are skipped so `said."The` counts. A following period is
- * fine (`Yes.`) unless another identifier component follows (`OpenAI.com`).
+ * Next token reads as a new sentence, not `ID`, `Bar()`, `Name@x`, or
+ * `OpenAI.com`. Opening quotes are skipped so `said."The` counts. A
+ * following period is fine (`Yes.`) unless another identifier follows.
  */
 function looksLikeSentenceStart(rest: string): boolean {
 	const start = skipOpenQuotes(rest);
 	const first = start[0];
 	if (!first || !UPPER.test(first)) {
+		return false;
+	}
+	const token = (start.match(/^[^\s]+/u)?.[0] ?? "").replace(/[.!?,;:]+$/u, "");
+	if (
+		/^[\p{L}\p{N}_$]*\(/u.test(token) ||
+		/^\p{Lu}{2}/u.test(token) ||
+		token.includes("@") ||
+		/[\p{L}\p{N}]+\.[\p{L}\p{N}]/u.test(token)
+	) {
 		return false;
 	}
 	const after = start.slice(1);
@@ -125,24 +134,6 @@ function looksLikeSentenceStart(rest: string): boolean {
 		return true;
 	}
 	return /[IAO]/u.test(first) && (next === "" || /\s/u.test(next));
-}
-
-/** First token only — a later `@alice` must not suppress an earlier smash. */
-function isIdentifierOrUrl(rest: string): boolean {
-	const token = (skipOpenQuotes(rest).match(/^[^\s]+/u)?.[0] ?? "").replace(/[.!?,;:]+$/u, "");
-	if (!token) {
-		return false;
-	}
-	if (/^[\p{L}\p{N}_$]*\(/u.test(token)) {
-		return true;
-	}
-	if (/^\p{Lu}{2}/u.test(token)) {
-		return true;
-	}
-	if (token.includes("@")) {
-		return true;
-	}
-	return /[\p{L}\p{N}]+\.[\p{L}\p{N}]/u.test(token);
 }
 
 function readBreak(text: string, index: number): { length: number; paragraph: boolean } | null {
@@ -201,7 +192,7 @@ function repairProse(text: string): string {
 			continue;
 		}
 		const rest = text.slice(i + (brk?.length ?? 0));
-		if (isMarkdownBlockStart(rest) || !looksLikeSentenceStart(rest) || isIdentifierOrUrl(rest)) {
+		if (isMarkdownBlockStart(rest) || !looksLikeSentenceStart(rest)) {
 			continue;
 		}
 		// No-gap smash: only after lowercase prose so React.Component stays.
@@ -248,6 +239,11 @@ export function unsquashSentences(text: string): string {
 	return result;
 }
 
+/** Hydrate stored assistant text; user turns pass through. */
+export function completionContent(role: string, content: string): string {
+	return role === "assistant" ? unsquashSentences(content) : content;
+}
+
 /**
  * Hold a trailing sentence break, a dangling `\`, or a lone capital after
  * punct until the next chunk decides smash vs identifier vs markdown.
@@ -257,8 +253,8 @@ export function createContentAssembler(): {
 	push: (chunk: string) => string;
 	flush: () => string;
 } {
-	let emitted = "";
-	let held = "";
+	let raw = "";
+	let emittedLength = 0;
 
 	function holdBackIndex(text: string): number {
 		if (text.endsWith("\\")) {
@@ -277,18 +273,17 @@ export function createContentAssembler(): {
 
 	return {
 		push(chunk: string): string {
-			const assembled = unsquashSentences(emitted + held + chunk);
+			raw += chunk;
+			const assembled = unsquashSentences(raw);
 			const holdFrom = holdBackIndex(assembled);
-			const text = assembled.slice(emitted.length, holdFrom);
-			held = assembled.slice(holdFrom);
-			emitted = assembled.slice(0, holdFrom);
+			const text = assembled.slice(emittedLength, holdFrom);
+			emittedLength = holdFrom;
 			return text;
 		},
 		flush(): string {
-			const assembled = unsquashSentences(emitted + held);
-			const text = assembled.slice(emitted.length);
-			emitted = assembled;
-			held = "";
+			const assembled = unsquashSentences(raw);
+			const text = assembled.slice(emittedLength);
+			emittedLength = assembled.length;
 			return text;
 		},
 	};

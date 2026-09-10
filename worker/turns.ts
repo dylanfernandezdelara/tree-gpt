@@ -12,7 +12,7 @@ import {
 	type CompletionMessage,
 	type UpstreamEvent,
 } from "./openrouter.js";
-import { unsquashSentences } from "./unsquash-sentences.js";
+import { completionContent } from "./unsquash-sentences.js";
 import {
 	fail,
 	loadChatRow,
@@ -484,7 +484,7 @@ export async function historyFor(
 	return capHistory(
 		rows.map((row) => ({
 			role: row.role,
-			content: row.role === "assistant" ? unsquashSentences(row.content) : row.content,
+			content: completionContent(row.role, row.content),
 		})),
 	);
 }
@@ -539,12 +539,7 @@ export async function persistFromStream(
 		if (!content.trim()) {
 			return await persist.abandon("OpenRouter returned an empty reply");
 		}
-		return await persist.complete(
-			unsquashSentences(content),
-			reasoning || null,
-			citations,
-			toolCalls,
-		);
+		return await persist.complete(content, reasoning || null, citations, toolCalls);
 	} catch {
 		try {
 			return await persist.abandon("Stream interrupted");

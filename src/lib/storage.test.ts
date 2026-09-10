@@ -4,6 +4,7 @@ import {
 	dropTransient,
 	isChat,
 	isMessage,
+	loadLocalChats,
 	loadModelEffort,
 	loadModelEfforts,
 	loadSelectedModel,
@@ -101,6 +102,54 @@ describe("thinking-trace persistence", () => {
 			citations: [{ url: "https://www.example.com/us-open", title: "US Open" }],
 			toolCalls: [{ id: "web_search", name: "web_search", state: "output-available" }],
 		});
+	});
+});
+
+describe("loadLocalChats", () => {
+	function memoryStorage(initial: Record<string, string> = {}) {
+		const store = new Map(Object.entries(initial));
+		return {
+			getItem: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+			setItem: (key: string, value: string) => {
+				store.set(key, value);
+			},
+			removeItem: (key: string) => {
+				store.delete(key);
+			},
+		};
+	}
+
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+		vi.stubGlobal("localStorage", memoryStorage());
+	});
+
+	it("repairs smashed assistant prose from guest storage", () => {
+		vi.stubGlobal(
+			"localStorage",
+			memoryStorage({
+				"treegpt.chats.guest.v1": JSON.stringify([
+					{
+						id: "c1",
+						title: "games",
+						createdAt: 1,
+						updatedAt: 2,
+						messages: [
+							{ id: "m1", role: "user", content: "projections", createdAt: 1 },
+							{
+								id: "m2",
+								role: "assistant",
+								content: "tonight's games.\nTomorrow's opener is set.",
+								createdAt: 2,
+							},
+						],
+					},
+				]),
+			}),
+		);
+		expect(loadLocalChats("guest")[0]?.messages[1]?.content).toBe(
+			"tonight's games. Tomorrow's opener is set.",
+		);
 	});
 });
 

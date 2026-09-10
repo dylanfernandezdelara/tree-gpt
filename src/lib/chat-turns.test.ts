@@ -59,16 +59,4 @@ describe("copyMessages / lastPersistedId / toTurns", () => {
 			{ role: "assistant", content: "a" },
 		]);
 	});
-
-	it("repairs smashed assistant sentences before they go back upstream", () => {
-		const smashed = message({
-			id: "m5",
-			role: "assistant",
-			content: "tonight's games.\nTomorrow's opener is set.",
-		});
-		expect(toTurns([finished, smashed])).toEqual([
-			{ role: "user", content: "q" },
-			{ role: "assistant", content: "tonight's games. Tomorrow's opener is set." },
-		]);
-	});
 });

@@ -5,7 +5,6 @@ import remarkGfm from "remark-gfm";
 import { GlobeIcon, LightbulbIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
 import type { Citation, Message, ToolCall } from "../types";
-import { unsquashSentences } from "../../worker/unsquash-sentences";
 import { IconButton } from "./IconButton";
 import {
 	CheckIcon,
@@ -52,7 +51,7 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 		);
 	}
 
-	const content = unsquashSentences(message.content);
+	const content = message.content;
 
 	if (message.pending) {
 		return (
