@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -20,6 +20,10 @@ function treeIconPathData(iconsSource: string): string[] {
 }
 
 describe("brand icons", () => {
+	it("ships a favicon.ico for Chrome's default probe", () => {
+		expect(existsSync(resolve(root, "public/favicon.ico"))).toBe(true);
+	});
+
 	it("keeps the favicon and app icon on the TreeIcon mark", () => {
 		const favicon = readFileSync(resolve(root, "public/favicon.svg"), "utf8");
 		const appIcon = readFileSync(resolve(root, "public/icon.svg"), "utf8");
@@ -32,11 +36,12 @@ describe("brand icons", () => {
 
 	it("advertises the logo for tabs and the home screen", () => {
 		const html = readFileSync(resolve(root, "index.html"), "utf8");
-		expect(html).toContain('href="/favicon.svg"');
-		expect(html).toContain('href="/favicon-32.png"');
+		expect(html).toContain('href="/favicon.ico?v=2"');
+		expect(html).toContain('href="/favicon.svg?v=2"');
+		expect(html).toContain('href="/favicon-32.png?v=2"');
 		expect(html).toContain('rel="apple-touch-icon"');
-		expect(html).toContain('href="/apple-touch-icon.png"');
-		expect(html).toContain('href="/site.webmanifest"');
+		expect(html).toContain('href="/apple-touch-icon.png?v=2"');
+		expect(html).toContain('href="/site.webmanifest?v=2"');
 		expect(html).toContain('apple-mobile-web-app-title');
 
 		const manifest: {
@@ -44,9 +49,9 @@ describe("brand icons", () => {
 			icons: Array<{ src: string; sizes: string }>;
 		} = JSON.parse(readFileSync(resolve(root, "public/site.webmanifest"), "utf8"));
 		expect(manifest.name).toBe("Fork");
-		expect(manifest.icons.some((icon) => icon.src === "/icon-192.png")).toBe(true);
-		expect(manifest.icons.some((icon) => icon.src === "/icon-512.png" && icon.sizes === "512x512")).toBe(
-			true,
-		);
+		expect(manifest.icons.some((icon) => icon.src === "/icon-192.png?v=2")).toBe(true);
+		expect(
+			manifest.icons.some((icon) => icon.src === "/icon-512.png?v=2" && icon.sizes === "512x512"),
+		).toBe(true);
 	});
 });
