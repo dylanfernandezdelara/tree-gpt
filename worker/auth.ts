@@ -16,6 +16,12 @@ export function googleProvider(env: Env) {
 	};
 }
 
+/** Signed session cookie so get-session / getSessionUser can skip D1. */
+export const SESSION_COOKIE_CACHE = {
+	enabled: true,
+	maxAge: 5 * 60,
+} as const;
+
 export function createAuth(env: Env, request: Request) {
 	const origin = new URL(request.url).origin;
 
@@ -24,6 +30,9 @@ export function createAuth(env: Env, request: Request) {
 		secret: env.BETTER_AUTH_SECRET,
 		baseURL: origin,
 		trustedOrigins: [origin],
+		session: {
+			cookieCache: SESSION_COOKIE_CACHE,
+		},
 		emailAndPassword: {
 			enabled: false,
 		},

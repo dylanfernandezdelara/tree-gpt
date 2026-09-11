@@ -5,6 +5,7 @@ import {
 	clearSessionHint,
 	hasSessionHint,
 	markOAuthRedirect,
+	readCachedUser,
 	syncSessionHint,
 } from "./session-hint";
 
@@ -32,48 +33,76 @@ describe("session hint", () => {
 		});
 	}
 
+	const dylan = {
+		id: "user-1",
+		name: "Dylan",
+		email: "dylan@example.com",
+		image: "https://example.com/a.png",
+	};
+
 	it("is absent until a session is recorded", () => {
 		stubStorage();
 		expect(hasSessionHint()).toBe(false);
-		syncSessionHint(true);
+		expect(readCachedUser()).toBeNull();
+		syncSessionHint(dylan);
 		expect(hasSessionHint()).toBe(true);
-		syncSessionHint(false);
+		expect(readCachedUser()).toEqual(dylan);
+		syncSessionHint(null);
 		expect(hasSessionHint()).toBe(false);
+		expect(readCachedUser()).toBeNull();
 	});
 
 	it("treats missing localStorage as signed out, without throwing", () => {
 		expect(hasSessionHint()).toBe(false);
-		expect(() => syncSessionHint(true)).not.toThrow();
+		expect(readCachedUser()).toBeNull();
+		expect(() => syncSessionHint(dylan)).not.toThrow();
 		expect(hasSessionHint()).toBe(false);
+		expect(readCachedUser()).toBeNull();
 	});
 
 	it("keeps the hint across a late signed-out session while OAuth is leaving", () => {
 		stubStorage();
+		syncSessionHint(dylan);
 		markOAuthRedirect();
 		expect(hasSessionHint()).toBe(true);
-		syncSessionHint(false);
+		expect(readCachedUser()).toEqual(dylan);
+		syncSessionHint(null);
 		expect(hasSessionHint()).toBe(true);
+		expect(readCachedUser()).toEqual(dylan);
 		clearSessionHint();
 		expect(hasSessionHint()).toBe(false);
+		expect(readCachedUser()).toBeNull();
 	});
 
 	it("does not restore the hint from a stale session after logout starts", () => {
 		stubStorage();
-		syncSessionHint(true);
+		syncSessionHint(dylan);
 		beginSignOut();
 		expect(hasSessionHint()).toBe(false);
-		syncSessionHint(true);
+		expect(readCachedUser()).toBeNull();
+		syncSessionHint(dylan);
 		expect(hasSessionHint()).toBe(false);
-		syncSessionHint(false);
+		expect(readCachedUser()).toBeNull();
+		syncSessionHint(null);
 		expect(hasSessionHint()).toBe(false);
 	});
 
 	it("restores the hint if logout is cancelled and the session is still there", () => {
 		stubStorage();
-		syncSessionHint(true);
+		syncSessionHint(dylan);
 		beginSignOut();
 		cancelSignOut();
-		syncSessionHint(true);
+		syncSessionHint(dylan);
 		expect(hasSessionHint()).toBe(true);
+		expect(readCachedUser()).toEqual(dylan);
+	});
+
+	it("ignores a malformed cached profile", () => {
+		stubStorage();
+		store.set("fork.signed-in", "1");
+		store.set("fork.session-user", "{not json");
+		expect(readCachedUser()).toBeNull();
+		store.set("fork.session-user", JSON.stringify({ email: "x@y.z" }));
+		expect(readCachedUser()).toBeNull();
 	});
 });

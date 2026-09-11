@@ -17,14 +17,6 @@ export function LoginPage() {
 	);
 }
 
-export function LoginPending() {
-	return (
-		<LoginChrome>
-			<p className="text-center text-sm text-muted-foreground">Checking…</p>
-		</LoginChrome>
-	);
-}
-
 // Below lg: marks scattered around the page edges, the logo pinned top-left
 // out of the flow, and the form at the exact center of the viewport. From lg:
 // the two-column layout with the logo in flow and the tiled grid on the right.
