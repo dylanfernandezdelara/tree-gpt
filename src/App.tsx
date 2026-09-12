@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LoginPage, LoginPending } from "./LoginPage";
 import { ChatPane } from "./components/ChatPane";
+import { groundStrayPanes } from "./lib/paneLift";
 import { IconButton } from "./components/IconButton";
 import { ComposeIcon, SidebarIcon } from "./components/Icons";
 import { PaneLayout } from "./components/PaneLayout";
@@ -26,15 +27,18 @@ import {
 	movePane,
 	NO_DROPS,
 	placeBeside,
+	pointerTargetAt,
 	squarestSplit,
 	removePane,
 	setPaneChat,
+	setSplitSize,
 	splitPane,
 	swapPanes,
 	type DragPayload,
 	type DropSide,
 	type LayoutNode,
 	type PaneLeaf,
+	type PaneRect,
 } from "./lib/layout";
 import {
 	loadBookmarks,
@@ -106,6 +110,16 @@ function withLayout(store: Store, root: LayoutNode, focusedPaneId?: string): Sto
 			};
 }
 
+/** Whether a pointer hover is a legal pane drop; mirrors the drop handler's recheck. */
+function moveLegal(
+	root: LayoutNode,
+	moverId: string,
+	hit: { paneId: string; target: DropSide | "swap" },
+): boolean {
+	const ability = dropAbility(root, hit.paneId, { kind: "pane", paneId: moverId });
+	return hit.target === "swap" ? ability.swap : ability.sides[hit.target];
+}
+
 /** A highlighted passage a pane will fork from once something is sent. */
 type ThreadAnchor = { messageId: string; quote: string };
 
@@ -142,6 +156,17 @@ function ChatApp({ user }: { user: AuthUser }) {
 	const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
 	/** What is being dragged right now; drives every pane's drop preview. */
 	const [drag, setDrag] = useState<DragPayload | null>(null);
+	/**
+	 * A pane move in flight: the real section follows the pointer (imperative,
+	 * no renders per move) while `over` previews the target through state.
+	 * The ref mirrors the state so the release handler never reads stale.
+	 */
+	const [moveDrag, setMoveDrag] = useState<{
+		paneId: string;
+		over: { paneId: string; target: DropSide | "swap" } | null;
+	} | null>(null);
+	const moveDragRef = useRef<typeof moveDrag>(null);
+	const moveRectsRef = useRef<readonly PaneRect[]>([]);
 	/** Pending threads per pane; transient like drafts. */
 	const [threads, setThreads] = useState<Record<string, ThreadAnchor>>({});
 	/**
@@ -339,14 +364,90 @@ function ChatApp({ user }: { user: AuthUser }) {
 				const split = splitPane(root, paneId, target, chatId);
 				return withLayout(prev, split.root, split.newPaneId);
 			}
-			if (target === "swap") {
+			// A pane dropped on a header or a body middle trades places with it.
+			if (target === "swap" || target === "center") {
 				return withLayout(prev, swapPanes(root, payload.paneId, paneId));
-			}
-			if (target === "center") {
-				return prev;
 			}
 			return withLayout(prev, movePane(root, payload.paneId, paneId, target), payload.paneId);
 		});
+	}
+
+	/** A divider was pulled; only that split's share changes. */
+	function resizeSplit(splitId: string, size: number) {
+		updateStore((prev) => {
+			const root = layoutOf(prev);
+			return root ? withLayout(prev, setSplitSize(root, splitId, size)) : prev;
+		});
+	}
+
+	/** A header press passed the move threshold: measure every pane once for hit-testing. */
+	function startMove(paneId: string) {
+		groundStrayPanes();
+		const rects: PaneRect[] = [];
+		for (const element of document.querySelectorAll("[data-pane-id]")) {
+			const id = element.getAttribute("data-pane-id");
+			if (!id) {
+				continue;
+			}
+			const box = element.getBoundingClientRect();
+			const header = element.querySelector(":scope > .pane__header");
+			rects.push({
+				paneId: id,
+				x: box.x,
+				y: box.y,
+				width: box.width,
+				height: box.height,
+				headerHeight: header ? header.getBoundingClientRect().height : 0,
+			});
+		}
+		moveRectsRef.current = rects;
+		const next = { paneId, over: null as { paneId: string; target: DropSide | "swap" } | null };
+		moveDragRef.current = next;
+		setMoveDrag(next);
+	}
+
+	/** Track the pointer over the measured panes; state only changes when the target does. */
+	function hoverMove(x: number, y: number) {
+		const session = moveDragRef.current;
+		// Rearranging is a conversation-workspace affair, as with native drops.
+		const root = view === "chats" ? activeLayout : null;
+		if (!session || !root) {
+			return;
+		}
+		const hit = pointerTargetAt(moveRectsRef.current, x, y, session.paneId);
+		const over = hit && moveLegal(root, session.paneId, hit) ? hit : null;
+		const prev = session.over;
+		if (
+			(prev?.paneId ?? null) === (over?.paneId ?? null) &&
+			(prev?.target ?? null) === (over?.target ?? null)
+		) {
+			return;
+		}
+		const next = { ...session, over };
+		moveDragRef.current = next;
+		setMoveDrag(next);
+	}
+
+	/** The pointer lifted: commit over a legal target, else the pane glides home. */
+	function endMove(): "commit" | "cancel" {
+		const session = moveDragRef.current;
+		moveDragRef.current = null;
+		moveRectsRef.current = [];
+		setMoveDrag(null);
+		if (!session?.over) {
+			return "cancel";
+		}
+		dropOnPane(session.over.paneId, session.over.target, {
+			kind: "pane",
+			paneId: session.paneId,
+		});
+		return "commit";
+	}
+
+	function cancelMove() {
+		moveDragRef.current = null;
+		moveRectsRef.current = [];
+		setMoveDrag(null);
 	}
 
 	function closePane(paneId: string) {
@@ -882,12 +983,16 @@ function ChatApp({ user }: { user: AuthUser }) {
 	function renderPane(pane: PaneLeaf) {
 		const chat = pane.chatId ? (chatById.get(pane.chatId) ?? null) : null;
 		const streaming = chat ? pendingIds.has(chat.id) : false;
+		// Native and pointer drags never overlap; abilities read whichever is live.
+		const activePayload =
+			drag ?? (moveDrag ? { kind: "pane" as const, paneId: moveDrag.paneId } : null);
 		return (
 			<ChatPane
 				key={pane.id}
 				pane={pane}
 				chat={chat}
 				focused={pane.id === focusedPane?.id}
+				movePreview={moveDrag?.over?.paneId === pane.id ? moveDrag.over.target : null}
 				// A lone chat-screen window has nothing to close to; the bookmarks
 				// screen's single window closes back to the full-width list.
 				showHeader={panes.length > 1 || view === "bookmarks"}
@@ -900,9 +1005,11 @@ function ChatApp({ user }: { user: AuthUser }) {
 				onEffortChange={changeEffort}
 				// The bookmarks screen holds one window, so nothing there accepts a drag.
 				ability={
-					view === "chats" && activeLayout ? dropAbility(activeLayout, pane.id, drag) : NO_DROPS
+					view === "chats" && activeLayout
+						? dropAbility(activeLayout, pane.id, activePayload)
+						: NO_DROPS
 				}
-				dropEffect={drag?.kind === "pane" ? "move" : "copy"}
+				dropEffect={activePayload?.kind === "pane" ? "move" : "copy"}
 				forks={(chat && forksOf.get(chat.id)) || NO_FORKS}
 				thread={threads[pane.id] ?? null}
 				highlight={highlight?.paneId === pane.id ? highlight : null}
@@ -928,8 +1035,10 @@ function ChatApp({ user }: { user: AuthUser }) {
 				onThread={(messageId, quote) => startThread(pane.id, messageId, quote)}
 				onBookmark={(messageId, quote) => addBookmarkFrom(pane.id, messageId, quote)}
 				onClearThread={() => clearThread(pane.id)}
-				onDragStart={setDrag}
-				onDragEnd={() => setDrag(null)}
+				onMoveStart={startMove}
+				onMoveOver={hoverMove}
+				onMoveEnd={endMove}
+				onMoveCancel={cancelMove}
 				onDrop={(target, payload) => dropOnPane(pane.id, target, payload)}
 			/>
 		);
@@ -976,7 +1085,9 @@ function ChatApp({ user }: { user: AuthUser }) {
 						<UserMenu user={user} placement="down" compact onLogOut={logOut} />
 					</header>
 				)}
-				<div className="main__body">
+				<div
+					className={drag || moveDrag ? "main__body main__body--dragging" : "main__body"}
+				>
 					{view === "bookmarks" ? (
 						<BookmarksView
 							bookmarks={bookmarks}
@@ -988,10 +1099,12 @@ function ChatApp({ user }: { user: AuthUser }) {
 							onRemove={deleteBookmark}
 							hasPanes={activeLayout !== null}
 						>
-							{activeLayout ? <PaneLayout root={activeLayout} renderPane={renderPane} /> : null}
+							{activeLayout ? (
+								<PaneLayout root={activeLayout} renderPane={renderPane} onResize={resizeSplit} />
+							) : null}
 						</BookmarksView>
 					) : activeLayout ? (
-						<PaneLayout root={activeLayout} renderPane={renderPane} />
+						<PaneLayout root={activeLayout} renderPane={renderPane} onResize={resizeSplit} />
 					) : null}
 				</div>
 			</main>

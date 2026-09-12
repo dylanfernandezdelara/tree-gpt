@@ -391,35 +391,65 @@ button {
 	min-height: 0;
 }
 
-.split {
+/*
+ * Motion-panel dividers. The grip straddles the seam with a wide invisible hit
+ * area; the hairline matches the old split border, thickening to brand on hover
+ * and while pulling. Scoped to the library's slot so the bookmarks resizer,
+ * which carries the same role, keeps its own styling.
+ */
+[data-motion-panels-separator] > [role="separator"][aria-orientation="vertical"] {
+	width: 14px;
+	align-self: stretch;
 	display: flex;
-	flex: 1;
-	min-width: 0;
-	min-height: 0;
+	justify-content: center;
 }
 
-.split--row {
-	flex-direction: row;
+[data-motion-panels-separator] > [role="separator"][aria-orientation="vertical"]::after {
+	content: "";
+	width: 1px;
+	background: var(--border-light);
 }
 
-.split--column {
-	flex-direction: column;
-}
-
-.split__cell {
-	position: relative;
+[data-motion-panels-separator] > [role="separator"][aria-orientation="horizontal"] {
+	height: 14px;
 	display: flex;
-	flex: 1 1 0;
-	min-width: 0;
-	min-height: 0;
+	align-items: center;
 }
 
-.split--row > .split__cell + .split__cell {
-	border-left: 1px solid var(--border-light);
+[data-motion-panels-separator] > [role="separator"][aria-orientation="horizontal"]::after {
+	content: "";
+	height: 1px;
+	width: 100%;
+	background: var(--border-light);
 }
 
-.split--column > .split__cell + .split__cell {
-	border-top: 1px solid var(--border-light);
+[data-motion-panels-separator] > [role="separator"]:hover::after,
+[data-motion-panels-separator] > [role="separator"][data-crossing]::after,
+[data-motion-panels-separator] > [role="separator"][data-resizing]::after {
+	background: var(--brand);
+}
+
+[data-motion-panels-separator]
+	> [role="separator"][aria-orientation="vertical"]:hover::after,
+[data-motion-panels-separator]
+	> [role="separator"][aria-orientation="vertical"][data-crossing]::after,
+[data-motion-panels-separator]
+	> [role="separator"][aria-orientation="vertical"][data-resizing]::after {
+	width: 3px;
+}
+
+[data-motion-panels-separator]
+	> [role="separator"][aria-orientation="horizontal"]:hover::after,
+[data-motion-panels-separator]
+	> [role="separator"][aria-orientation="horizontal"][data-crossing]::after,
+[data-motion-panels-separator]
+	> [role="separator"][aria-orientation="horizontal"][data-resizing]::after {
+	height: 3px;
+}
+
+/* While a pane or chat is being moved, dividers let drop events pass through to the panes. */
+.main__body--dragging [data-motion-panels-separator] {
+	pointer-events: none;
 }
 
 .pane {
@@ -462,11 +492,14 @@ button {
 	color: var(--text-secondary);
 	cursor: grab;
 	transition: background 0.12s ease;
+	/* A move handle: no text selection mid-drag, and touch drags work too. */
+	user-select: none;
+	touch-action: none;
 }
 
 /*
- * The bar a drop would swap with. The bar being DRAGGED is left alone: the
- * drag chip already shows what is in hand, so highlighting it too was noise.
+ * The bar a drop would swap with. The bar being MOVED is left alone: the
+ * window itself already shows what is in hand, so highlighting it too was noise.
  */
 .pane__header--target {
 	background: var(--bubble-bg);
@@ -478,30 +511,17 @@ button {
 }
 
 /*
- * The drag image, kept off-screen because setDragImage refuses an element that
- * is display:none or visibility:hidden. It is rasterised as a snapshot, so a
- * backdrop-filter would have nothing behind it to blur -- this reads as glass
- * through translucency, a hairline and a shadow instead.
+ * A pane mid-move: lifted out of its slot at its own box (geometry comes from
+ * inline styles). Fully opaque on the main surface so text stays legible over
+ * whatever it crosses; the shadow is what reads as picked up.
  */
-.pane__drag-chip {
+.pane--moving {
 	position: fixed;
-	top: -9999px;
-	left: -9999px;
-	display: inline-flex;
-	align-items: center;
-	max-width: 260px;
-	padding: 6px 14px;
-	border: 1px solid rgba(0, 0, 0, 0.08);
-	border-radius: 999px;
-	background: rgba(255, 255, 255, 0.75);
-	box-shadow: var(--menu-shadow);
-	font-size: 14px;
-	line-height: 20px;
-	color: var(--text-primary);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	pointer-events: none;
+	z-index: 80;
+	background: var(--surface-main);
+	box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+	cursor: grabbing;
+	will-change: transform;
 }
 
 .pane__title {

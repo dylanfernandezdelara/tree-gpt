@@ -5,17 +5,19 @@ import {
 	type DragEvent,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent as ReactMouseEvent,
+	type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
 	dropSideAt,
 	hasDragPayload,
 	readDragPayload,
-	writeDragPayload,
 	type DragPayload,
 	type DropAbility,
 	type DropSide,
 	type PaneLeaf,
 } from "../lib/layout";
+import { registerLift, settleMove } from "../lib/paneLift";
+import { visualScale } from "../lib/zoom";
 import type { Chat } from "../types";
 import { ChatThread } from "./ChatThread";
 import { Composer } from "./Composer";
@@ -29,10 +31,15 @@ import type { EffortId, ModelId } from "../../worker/tree-types";
 /** Where a drop would land: an edge or middle of the body, or the header. */
 type DropTarget = DropSide | "swap";
 
+/** Pixels the pointer must travel before a header press becomes a move; clicks pass through below it. */
+const MOVE_THRESHOLD = 5;
+
 type Props = {
 	pane: PaneLeaf;
 	chat: Chat | null;
 	focused: boolean;
+	/** Drop preview driven by a pointer move in flight (native drags preview on their own). */
+	movePreview: DropTarget | null;
 	/** Show the title bar with its close button and drag handle. */
 	showHeader: boolean;
 	draft: string;
@@ -71,8 +78,12 @@ type Props = {
 	onThread: (messageId: string, quote: string) => void;
 	onBookmark: (messageId: string, quote: string) => void;
 	onClearThread: () => void;
-	onDragStart: (payload: DragPayload) => void;
-	onDragEnd: () => void;
+	/** Pointer-move session: lift, hover, release-to-commit, cancel. */
+	onMoveStart: (paneId: string) => void;
+	onMoveOver: (x: number, y: number) => void;
+	/** The pointer lifted; commits when over a legal target. Answers what happened. */
+	onMoveEnd: () => "commit" | "cancel";
+	onMoveCancel: () => void;
 	/** Something was dropped on this pane. */
 	onDrop: (target: DropTarget, payload: DragPayload) => void;
 };
@@ -82,6 +93,7 @@ export function ChatPane({
 	pane,
 	chat,
 	focused,
+	movePreview,
 	showHeader,
 	draft,
 	streaming,
@@ -107,8 +119,10 @@ export function ChatPane({
 	onThread,
 	onBookmark,
 	onClearThread,
-	onDragStart,
-	onDragEnd,
+	onMoveStart,
+	onMoveOver,
+	onMoveEnd,
+	onMoveCancel,
 	onDrop,
 }: Props) {
 	// dragenter/dragleave fire for every child; count depth so the preview doesn't flicker.
@@ -119,8 +133,7 @@ export function ChatPane({
 	const [editingTitle, setEditingTitle] = useState(false);
 	const [titleDraft, setTitleDraft] = useState("");
 	const inputRef = useRef<HTMLTextAreaElement>(null);
-	/** Off-screen stand-in used as the drag image, so a drag shows the name alone. */
-	const chipRef = useRef<HTMLSpanElement>(null);
+	const sectionRef = useRef<HTMLElement>(null);
 
 	// A pane opened for threading should be ready to type in straight away,
 	// including when an existing pane was reused and so never remounted.
@@ -188,7 +201,7 @@ export function ChatPane({
 		return dropSideAt(event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height);
 	}
 
-	// --- the pane body: edges split, the middle opens a chat in place ---
+	// --- the pane body: edges split, the middle opens a chat in place or swaps a pane ---
 
 	function handleBodyDragEnter(event: DragEvent<HTMLElement>) {
 		if (!hasDragPayload(event.dataTransfer)) {
@@ -235,14 +248,168 @@ export function ChatPane({
 
 	// --- the header: a drag handle, and a drop target that swaps panes ---
 
-	function handleHeaderDragStart(event: DragEvent<HTMLElement>) {
-		const payload: DragPayload = { kind: "pane", paneId: pane.id };
-		writeDragPayload(event.dataTransfer, payload, title);
-		// Without this the browser drags a snapshot of the whole header bar.
-		if (chipRef.current) {
-			event.dataTransfer.setDragImage(chipRef.current, 16, 18);
+	/**
+	 * Move this pane with the pointer: past a small threshold the real section
+	 * lifts out of its slot and follows the cursor until release, Escape, or
+	 * focus loss. The lift is imperative (no renders per move); only the drop
+	 * target flows through state. Clicks, double-clicks, and the rename input
+	 * pass through untouched below the threshold.
+	 */
+	function handleHeaderPointerDown(event: ReactPointerEvent<HTMLElement>) {
+		if (!event.isPrimary || event.button !== 0 || editingTitle) {
+			return;
 		}
-		onDragStart(payload);
+		if ((event.target as HTMLElement).closest("button, input")) {
+			return;
+		}
+		const maybeSection = sectionRef.current;
+		if (!maybeSection) {
+			return;
+		}
+		const section: HTMLElement = maybeSection;
+		const startX = event.clientX;
+		const startY = event.clientY;
+		const header = event.currentTarget;
+		const pointerId = event.pointerId;
+		// Rects and pointer deltas arrive in visual (post-zoom) pixels; the
+		// inline geometry below is pre-zoom CSS pixels, so everything written
+		// back is divided out or the pane lands short by the zoom factor.
+		const scale = visualScale(section);
+		let active = false;
+		let finished = false;
+
+		function lift() {
+			const box = section.getBoundingClientRect();
+			// First: starting the move grounds strays from prior sessions.
+			// Only then register this lift, or grounding would clear it.
+			onMoveStart(pane.id);
+			registerLift(section);
+			section.classList.add("pane--moving");
+			section.style.width = `${box.width / scale}px`;
+			section.style.height = `${box.height / scale}px`;
+			section.style.left = `${box.left / scale}px`;
+			section.style.top = `${box.top / scale}px`;
+			section.style.transform = "translate(0px, 0px)";
+			active = true;
+			// Keeps the release landing here even off-window or mid-fling.
+			try {
+				header.setPointerCapture(pointerId);
+			} catch {
+				// The pointer is already gone; the button check below ends it.
+			}
+		}
+
+		function move(pointer: PointerEvent) {
+			if (pointer.pointerId !== pointerId) {
+				return;
+			}
+			if ((pointer.buttons & 1) === 0) {
+				// The button went up somewhere unreachable (off-window before
+				// the threshold, when no capture holds the gesture). Past the
+				// threshold this still lands the pane; it never abandons it.
+				if (active) {
+					finish(false);
+				} else {
+					cleanup();
+				}
+				return;
+			}
+			if (!active) {
+				if (
+					Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < MOVE_THRESHOLD
+				) {
+					return;
+				}
+				lift();
+			}
+			// A re-render can rewrite className mid-gesture (a focus change does);
+			// re-assert the lift so the pane never falls back into flow.
+			if (!section.classList.contains("pane--moving")) {
+				section.classList.add("pane--moving");
+			}
+			section.style.transform = `translate(${(pointer.clientX - startX) / scale}px, ${(pointer.clientY - startY) / scale}px)`;
+			onMoveOver(pointer.clientX, pointer.clientY);
+		}
+
+		function finish(commit: boolean) {
+			if (finished) {
+				return;
+			}
+			finished = true;
+			cleanup();
+			if (!active) {
+				return;
+			}
+			// A press-and-release still dispatches a click; swallow it so the
+			// drop does not also focus a composer. The guard lives 350ms: the
+			// gesture's own click lands within a frame or two of the release,
+			// while any later real click passes through. (A zero-delay removal
+			// would run before the click dispatches and swallow nothing.)
+			const kill = (evt: Event) => {
+				evt.stopPropagation();
+				evt.preventDefault();
+			};
+			window.addEventListener("click", kill, { capture: true, once: true });
+			window.setTimeout(
+				() => window.removeEventListener("click", kill, { capture: true }),
+				350,
+			);
+			if (!commit) {
+				onMoveCancel();
+				settleMove(section, false);
+				return;
+			}
+			settleMove(section, onMoveEnd() === "commit");
+		}
+
+		function cleanup() {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", cancel);
+			window.removeEventListener("keydown", key);
+			window.removeEventListener("blur", blur);
+			header.removeEventListener("lostpointercapture", dropped);
+			try {
+				if (header.hasPointerCapture(pointerId)) {
+					header.releasePointerCapture(pointerId);
+				}
+			} catch {
+				// Already released; implicit release on pointerup covers it.
+			}
+		}
+		function up(pointer: PointerEvent) {
+			if (pointer.pointerId !== pointerId || pointer.button !== 0) {
+				return;
+			}
+			finish(true);
+		}
+		function cancel(pointer: PointerEvent) {
+			if (pointer.pointerId !== pointerId) {
+				return;
+			}
+			finish(false);
+		}
+		function key(pointer: KeyboardEvent) {
+			if (pointer.key === "Escape") {
+				finish(false);
+			}
+		}
+		function blur() {
+			finish(false);
+		}
+		function dropped(pointer: PointerEvent) {
+			// Capture died without a release reaching us (the browser took the
+			// gesture for its own drag or scroll): land instead of stranding.
+			if (pointer.pointerId === pointerId && active) {
+				finish(false);
+			}
+		}
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", cancel);
+		window.addEventListener("keydown", key);
+		window.addEventListener("blur", blur);
+		header.addEventListener("lostpointercapture", dropped);
 	}
 
 	function handleHeaderDragEnter(event: DragEvent<HTMLElement>) {
@@ -291,12 +458,15 @@ export function ChatPane({
 	}
 
 	// A refused target simply shows nothing; the drop is ignored either way.
-	const previewSide = dropSide && accepts(dropSide) ? dropSide : null;
+	// Native drags preview from hover state, pointer moves from props; only one
+	// gesture is ever in flight.
+	const nativePreview = dropSide && accepts(dropSide) ? dropSide : null;
+	const moveSide =
+		movePreview && movePreview !== "swap" && accepts(movePreview) ? movePreview : null;
+	const previewSide = nativePreview ?? moveSide;
+	const swapLit = (headerHover && ability.swap) || movePreview === "swap";
 	const title = chat ? chat.title : "New chat";
-	const headerClass = [
-		"pane__header",
-		headerHover && ability.swap ? "pane__header--target" : "",
-	]
+	const headerClass = ["pane__header", swapLit ? "pane__header--target" : ""]
 		.filter(Boolean)
 		.join(" ");
 
@@ -331,6 +501,7 @@ export function ChatPane({
 
 	return (
 		<section
+			ref={sectionRef}
 			className={`pane${focused ? " pane--focused" : ""}${
 				showHeader ? " pane--headed" : ""
 			}`}
@@ -346,10 +517,9 @@ export function ChatPane({
 			{showHeader ? (
 				<div
 					className={headerClass}
-					// Dragging while renaming would hijack text selection in the input.
-					draggable={!editingTitle}
-					onDragStart={handleHeaderDragStart}
-					onDragEnd={onDragEnd}
+					// A move handle for the pointer session; still a native drop
+					// target, so sidebar chats keep dropping here to swap.
+					onPointerDown={handleHeaderPointerDown}
 					onDragEnter={handleHeaderDragEnter}
 					onDragOver={handleHeaderDragOver}
 					onDragLeave={handleHeaderDragLeave}
@@ -374,13 +544,7 @@ export function ChatPane({
 							{title}
 						</span>
 					)}
-					<IconButton
-						label="Close pane"
-						className="pane__close"
-						draggable={false}
-						onDragStart={(event) => event.preventDefault()}
-						onClick={onClose}
-					>
+					<IconButton label="Close pane" className="pane__close" onClick={onClose}>
 						<CloseIcon />
 					</IconButton>
 				</div>
@@ -417,10 +581,6 @@ export function ChatPane({
 			{/* Remounted on every new key, which replays the one-shot ring. Only the
 			    focused pane is ever given a key, so the ring always marks focus. */}
 			{flashKey === null ? null : <span key={flashKey} className="pane__flash" aria-hidden="true" />}
-			{/* Rendered off-screen: setDragImage refuses a hidden element. */}
-			<span className="pane__drag-chip" ref={chipRef} aria-hidden="true">
-				{title}
-			</span>
 		</section>
 	);
 }

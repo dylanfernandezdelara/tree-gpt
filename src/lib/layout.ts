@@ -12,6 +12,10 @@ export type SplitNode = {
 	kind: "split";
 	id: string;
 	direction: SplitDirection;
+	/** Percentage of the group the sized child holds; the other child fills the rest. */
+	size: number;
+	/** Which child is the sized one. It follows the pane across swaps, so a swapped pane keeps its width instead of remounting. */
+	sized: 0 | 1;
 	children: [LayoutNode, LayoutNode];
 };
 export type LayoutNode = PaneLeaf | SplitNode;
@@ -35,6 +39,15 @@ export const MAX_AXIS_DEPTH = 2;
 export const MAX_PANES = 16;
 /** Fraction of a pane's width/height that counts as an edge zone. */
 const EDGE_FRACTION = 0.25;
+/** Percentage a fresh split gives its sized child: an even half, as before. */
+const DEFAULT_SIZE = 50;
+/** Stored sizes stay strictly inside the group; the divider clamps tighter at render. */
+const MIN_SIZE = 1;
+const MAX_SIZE = 99;
+
+function clampSize(size: number): number {
+	return Math.min(MAX_SIZE, Math.max(MIN_SIZE, size));
+}
 
 export function createPane(chatId: string | null = null): PaneLeaf {
 	return { kind: "pane", id: newId(), chatId };
@@ -132,6 +145,8 @@ function attach(
 		kind: "split",
 		id: newId(),
 		direction,
+		size: DEFAULT_SIZE,
+		sized: 0,
 		children: leafFirst ? [leaf, target] : [target, leaf],
 	}));
 }
@@ -174,7 +189,10 @@ export function movePane(
 
 /**
  * Exchange two panes' positions. One traversal on purpose: replacing them one
- * after the other would briefly leave two leaves sharing an id.
+ * after the other would briefly leave two leaves sharing an id. Siblings take
+ * their sizes with them, so each keeps its sized/filling role and neither
+ * remounts; across splits the panes remount either way, so those splits keep
+ * their geometry.
  */
 export function swapPanes(root: LayoutNode, aId: string, bId: string): LayoutNode {
 	if (aId === bId) {
@@ -191,6 +209,35 @@ export function swapPanes(root: LayoutNode, aId: string, bId: string): LayoutNod
 				return b as PaneLeaf;
 			}
 			return node.id === bId ? (a as PaneLeaf) : node;
+		}
+		const [first, second] = node.children;
+		if (
+			(first.id === aId && second.id === bId) ||
+			(first.id === bId && second.id === aId)
+		) {
+			return { ...node, sized: node.sized === 0 ? 1 : 0, children: [second, first] };
+		}
+		const nextFirst = walk(first);
+		const nextSecond = walk(second);
+		return nextFirst === first && nextSecond === second
+			? node
+			: { ...node, children: [nextFirst, nextSecond] };
+	}
+	return walk(root);
+}
+
+/** Resize a split: its sized child takes `size` percent of the group. Unknown splits and non-finite sizes are ignored. */
+export function setSplitSize(root: LayoutNode, splitId: string, size: number): LayoutNode {
+	if (!Number.isFinite(size)) {
+		return root;
+	}
+	const clamped = clampSize(size);
+	function walk(node: LayoutNode): LayoutNode {
+		if (node.kind === "pane") {
+			return node;
+		}
+		if (node.id === splitId) {
+			return node.size === clamped ? node : { ...node, size: clamped };
 		}
 		const [first, second] = node.children;
 		const nextFirst = walk(first);
@@ -329,7 +376,8 @@ export function dropAbility(
 			right: ability.horizontal,
 			top: ability.vertical,
 			bottom: ability.vertical,
-			center: false,
+			// Dropping a window onto another window trades places, like the header.
+			center: true,
 		},
 		swap: true,
 	};
@@ -394,7 +442,68 @@ export function validateLayout(value: unknown, chatIds: ReadonlySet<string>): La
 		if (!first || !second) {
 			return null;
 		}
-		return { kind: "split", id: node.id, direction: node.direction, children: [first, second] };
+		// Layouts saved before dividers existed carry no sizes; they read as an even half.
+		const size =
+			typeof node.size === "number" && Number.isFinite(node.size)
+				? clampSize(node.size)
+				: DEFAULT_SIZE;
+		const sized: 0 | 1 = node.sized === 1 ? 1 : 0;
+		return {
+			kind: "split",
+			id: node.id,
+			direction: node.direction,
+			size,
+			sized,
+			children: [first, second],
+		};
+	}
+	return null;
+}
+
+/** Measured box of a pane on screen, read once when a pointer move starts. */
+export type PaneRect = {
+	paneId: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	/** Swap-by-header band at the top; 0 when the pane shows no header. */
+	headerHeight: number;
+};
+
+/** Half the divider strip: rects inflate by this so a pointer over a seam still hits a pane. */
+const SEAM_HALF = 8;
+
+/**
+ * Which pane a pointer at (x, y) is over during a pane move, and what dropping
+ * there would do: the header band swaps, the body splits by edge zone. The
+ * moving pane itself is excluded; dropping on its own slot cancels.
+ */
+export function pointerTargetAt(
+	rects: readonly PaneRect[],
+	x: number,
+	y: number,
+	excludeId: string,
+): { paneId: string; target: DropSide | "swap" } | null {
+	for (const rect of rects) {
+		if (rect.paneId === excludeId) {
+			continue;
+		}
+		if (
+			x < rect.x - SEAM_HALF ||
+			x > rect.x + rect.width + SEAM_HALF ||
+			y < rect.y - SEAM_HALF ||
+			y > rect.y + rect.height + SEAM_HALF
+		) {
+			continue;
+		}
+		if (rect.headerHeight > 0 && y - rect.y < rect.headerHeight) {
+			return { paneId: rect.paneId, target: "swap" };
+		}
+		return {
+			paneId: rect.paneId,
+			target: dropSideAt(x - rect.x, y - rect.y, rect.width, rect.height),
+		};
 	}
 	return null;
 }
