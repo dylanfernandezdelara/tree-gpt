@@ -20,7 +20,7 @@ import {
 	searchMetaFromPayload,
 } from "./search-meta.js";
 import { systemPrompt } from "./system-prompt.js";
-import { unsquashSentences } from "./unsquash-sentences.js";
+import { createContentAssembler, unsquashSentences } from "./unsquash-sentences.js";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -481,7 +481,7 @@ function translateStream(
 	let finished = false;
 	const searchAcc = createSearchAccumulator();
 	let lastSearchFingerprint = "";
-	let emittedContent = "";
+	const contentAssembler = createContentAssembler();
 
 	return new ReadableStream<UpstreamEvent>({
 		// Pump from start(), not pull(): resolving pulls without enqueueing
@@ -496,7 +496,16 @@ function translateStream(
 			const heartbeat = () => {
 				emit({ type: "heartbeat" });
 			};
+			const flushContent = () => {
+				const tail = contentAssembler.flush();
+				if (tail.length > 0) {
+					emit({ type: "content", text: tail });
+				}
+			};
 			const finish = (event: StreamEvent) => {
+				if (event.type === "done") {
+					flushContent();
+				}
 				if (!finished) {
 					finished = true;
 					controller.enqueue(event);
@@ -620,11 +629,11 @@ function translateStream(
 					events.push({ type: "reasoning", text });
 				}
 			}
-			if (delta.content) {
-				const assembled = unsquashSentences(emittedContent + delta.content);
-				const text = assembled.slice(emittedContent.length);
-				emittedContent = assembled;
-				events.push({ type: "content", text });
+			if (delta.content !== undefined) {
+				const text = contentAssembler.push(delta.content);
+				if (text.length > 0) {
+					events.push({ type: "content", text });
+				}
 			}
 		}
 		return events;
@@ -646,7 +655,13 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 	const out: { content?: string; reasoning?: string } = {};
 	if ("content" in delta) {
 		const content = messageText(delta.content);
-		if (content) {
+		if (content !== null && content.length > 0) {
+			out.content = content;
+		}
+	}
+	if (out.content === undefined && "text" in delta) {
+		const content = messageText(delta.text);
+		if (content !== null && content.length > 0) {
 			out.content = content;
 		}
 	}
@@ -756,7 +771,10 @@ function parseMessages(
 		// blobs. They are accepted and dropped: we send OpenRouter server
 		// tools each request but never persist or replay tool state, so
 		// echoing old thinking only slows the next reply.
-		parsed.push({ role: item.role, content });
+		parsed.push({
+			role: item.role,
+			content,
+		});
 	}
 
 	return { ok: true, messages: capHistory(parsed) };
@@ -848,7 +866,38 @@ function toOpenRouterMessages(
 	];
 }
 
-/** OpenRouter `content`: string, null while reasoning, or text / output_text parts. */
+/** `text` / `{ value }` — the OpenRouter and Responses shapes we have seen. */
+function textField(value: unknown): string | null {
+	if (typeof value === "string") {
+		return value;
+	}
+	if (typeof value === "object" && value !== null && "value" in value && typeof value.value === "string") {
+		return value.value;
+	}
+	return null;
+}
+
+/** String part, `{ text }`, `{ text: { value } }`, or `{ type: "output_text", text }`. */
+function partText(part: unknown): string | null {
+	if (typeof part === "string") {
+		return part;
+	}
+	if (typeof part !== "object" || part === null) {
+		return null;
+	}
+	if ("text" in part) {
+		const text = textField(part.text);
+		if (text !== null) {
+			return text;
+		}
+	}
+	if ("output_text" in part) {
+		return textField(part.output_text);
+	}
+	return null;
+}
+
+/** OpenRouter `content`: string, null while reasoning, one part, or text / output_text parts. */
 function messageText(content: unknown): string | null {
 	if (typeof content === "string") {
 		return content;
@@ -856,24 +905,15 @@ function messageText(content: unknown): string | null {
 	if (content === null || content === undefined) {
 		return "";
 	}
-	if (!Array.isArray(content)) {
-		return null;
-	}
-
-	const parts: string[] = [];
-	for (const part of content) {
-		if (typeof part === "string") {
-			parts.push(part);
-			continue;
+	if (Array.isArray(content)) {
+		const parts: string[] = [];
+		for (const part of content) {
+			const text = partText(part);
+			if (text !== null) {
+				parts.push(text);
+			}
 		}
-		if (
-			typeof part === "object" &&
-			part !== null &&
-			"text" in part &&
-			typeof part.text === "string"
-		) {
-			parts.push(part.text);
-		}
+		return parts.join("");
 	}
-	return parts.join("");
+	return partText(content);
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chatRow, makeDb, messageRow } from "./testing/d1.js";
-import { GC_ROOT_SQL, PATH_SQL, gcRoot, loadPath, summaryFor } from "./tree.js";
+import { GC_ROOT_SQL, PATH_SQL, gcRoot, loadPath, summaryFor, toApiMessage } from "./tree.js";
 import { PENDING_TIMEOUT_MS } from "./tree-types.js";
 
 describe("loadPath", () => {
@@ -105,5 +105,35 @@ describe("gcRoot", () => {
 		expect(statements[0]?.sql).toMatch(/WITH RECURSIVE reach/);
 		expect(statements[0]?.sql).toMatch(/id NOT IN/);
 		expect(statements[0]?.params).toEqual(["user-1", "root-1", "user-1", "root-1"]);
+	});
+});
+
+describe("toApiMessage", () => {
+	it("repairs smashed assistant prose from stored rows", () => {
+		expect(
+			toApiMessage(
+				messageRow({
+					id: "m2",
+					role: "assistant",
+					content: "tonight's games.\nTomorrow's opener is set.",
+					created_at: 2,
+				}),
+			),
+		).toMatchObject({
+			id: "m2",
+			role: "assistant",
+			content: "tonight's games. Tomorrow's opener is set.",
+			createdAt: 2,
+		});
+	});
+
+	it("leaves user content unchanged", () => {
+		expect(
+			toApiMessage(
+				messageRow({
+					content: "games.\nTomorrow",
+				}),
+			),
+		).toMatchObject({ role: "user", content: "games.\nTomorrow" });
 	});
 });

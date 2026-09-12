@@ -4,14 +4,18 @@ import {
 	dropTransient,
 	isChat,
 	isMessage,
+	loadLocalChats,
 	loadModelEffort,
 	loadModelEfforts,
 	loadSelectedModel,
 	loadSidebarOpen,
+	loadSidebarOpenPreference,
 	persistableFields,
+	resolveSidebarOpen,
 	saveModelEffort,
 	saveSelectedModel,
 	saveSidebarOpen,
+	SIDEBAR_PREF_REV,
 } from "./storage";
 
 const legacyBlobMessage = {
@@ -104,6 +108,54 @@ describe("thinking-trace persistence", () => {
 	});
 });
 
+describe("loadLocalChats", () => {
+	function memoryStorage(initial: Record<string, string> = {}) {
+		const store = new Map(Object.entries(initial));
+		return {
+			getItem: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+			setItem: (key: string, value: string) => {
+				store.set(key, value);
+			},
+			removeItem: (key: string) => {
+				store.delete(key);
+			},
+		};
+	}
+
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+		vi.stubGlobal("localStorage", memoryStorage());
+	});
+
+	it("repairs smashed assistant prose from guest storage", () => {
+		vi.stubGlobal(
+			"localStorage",
+			memoryStorage({
+				"treegpt.chats.guest.v1": JSON.stringify([
+					{
+						id: "c1",
+						title: "games",
+						createdAt: 1,
+						updatedAt: 2,
+						messages: [
+							{ id: "m1", role: "user", content: "projections", createdAt: 1 },
+							{
+								id: "m2",
+								role: "assistant",
+								content: "tonight's games.\nTomorrow's opener is set.",
+								createdAt: 2,
+							},
+						],
+					},
+				]),
+			}),
+		);
+		expect(loadLocalChats("guest")[0]?.messages[1]?.content).toBe(
+			"tonight's games. Tomorrow's opener is set.",
+		);
+	});
+});
+
 describe("model preference", () => {
 	function memoryStorage(initial: Record<string, string> = {}) {
 		const store = new Map(Object.entries(initial));
@@ -125,6 +177,16 @@ describe("model preference", () => {
 
 	it("defaults to Muse Spark when nothing is stored", () => {
 		expect(loadSelectedModel()).toBe("meta/muse-spark-1.3-contributor");
+	});
+
+	it("defaults the sidebar to open on desktop when nothing is stored", () => {
+		expect(loadSidebarOpenPreference()).toBe(null);
+		expect(loadSidebarOpen()).toBe(true);
+		expect(loadSidebarOpen(false)).toBe(true);
+	});
+
+	it("defaults the sidebar to closed on mobile when nothing is stored", () => {
+		expect(loadSidebarOpen(true)).toBe(false);
 	});
 
 	it("round-trips each allowlisted model", () => {
@@ -150,6 +212,79 @@ describe("model preference", () => {
 		saveSelectedModel("openai/gpt-5.6-luna");
 		expect(loadSidebarOpen()).toBe(false);
 		expect(loadSelectedModel()).toBe("openai/gpt-5.6-luna");
+	});
+});
+
+describe("sidebar preference", () => {
+	function memoryStorage(initial: Record<string, string> = {}) {
+		const store = new Map(Object.entries(initial));
+		return {
+			getItem: (key: string) => (store.has(key) ? (store.get(key) as string) : null),
+			setItem: (key: string, value: string) => {
+				store.set(key, value);
+			},
+			removeItem: (key: string) => {
+				store.delete(key);
+			},
+		};
+	}
+
+	beforeEach(() => {
+		vi.unstubAllGlobals();
+		vi.stubGlobal("localStorage", memoryStorage());
+	});
+
+	it("treats a legacy auto-saved closed sidebar as unset", () => {
+		vi.stubGlobal(
+			"localStorage",
+			memoryStorage({ "treegpt.ui.v1": JSON.stringify({ sidebarOpen: false }) }),
+		);
+		expect(loadSidebarOpenPreference()).toBe(null);
+		expect(loadSidebarOpen()).toBe(true);
+		expect(loadSidebarOpen(true)).toBe(false);
+	});
+
+	it("ignores a stored boolean that lacks the user-toggle revision", () => {
+		vi.stubGlobal(
+			"localStorage",
+			memoryStorage({ "treegpt.ui.v1": JSON.stringify({ sidebarOpen: true }) }),
+		);
+		expect(loadSidebarOpenPreference()).toBe(null);
+		expect(loadSidebarOpen()).toBe(true);
+	});
+
+	it("persists an explicit collapse across later loads", () => {
+		saveSidebarOpen(false);
+		expect(loadSidebarOpenPreference()).toBe(false);
+		expect(loadSidebarOpen()).toBe(false);
+		expect(loadSidebarOpen(true)).toBe(false);
+	});
+
+	it("persists an explicit expand across later loads", () => {
+		saveSidebarOpen(false);
+		saveSidebarOpen(true);
+		expect(loadSidebarOpenPreference()).toBe(true);
+		expect(loadSidebarOpen()).toBe(true);
+		expect(loadSidebarOpen(true)).toBe(true);
+	});
+
+	it("keeps a collapsed preference when other UI state is written", () => {
+		saveSidebarOpen(false);
+		saveSelectedModel("openai/gpt-5.6-luna");
+		expect(JSON.parse(localStorage.getItem("treegpt.ui.v1") ?? "{}")).toMatchObject({
+			sidebarOpen: false,
+			sidebarPrefRev: SIDEBAR_PREF_REV,
+		});
+		expect(loadSidebarOpen()).toBe(false);
+	});
+
+	it("resolves viewport defaults only when the user has never toggled", () => {
+		expect(resolveSidebarOpen(null, false)).toBe(true);
+		expect(resolveSidebarOpen(null, true)).toBe(false);
+		expect(resolveSidebarOpen(false, false)).toBe(false);
+		expect(resolveSidebarOpen(false, true)).toBe(false);
+		expect(resolveSidebarOpen(true, false)).toBe(true);
+		expect(resolveSidebarOpen(true, true)).toBe(true);
 	});
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { googleProvider } from "./auth.js";
+import { googleProvider, SESSION_COOKIE_CACHE } from "./auth.js";
 import { makeDb } from "./testing/d1.js";
 
 function envWith(extras: Record<string, string | undefined> = {}): Env {
@@ -14,6 +14,15 @@ function envWith(extras: Record<string, string | undefined> = {}): Env {
 		...extras,
 	} as unknown as Env;
 }
+
+describe("session cookie cache", () => {
+	it("is enabled so get-session can skip D1 on revisits", () => {
+		expect(SESSION_COOKIE_CACHE).toEqual({
+			enabled: true,
+			maxAge: 5 * 60,
+		});
+	});
+});
 
 describe("googleProvider", () => {
 	it("omits Google when either secret is missing or blank", () => {

@@ -104,6 +104,19 @@ async function consumeStream(
 			}
 		}
 	}
+	buffer += decoder.decode();
+	if (buffer.trim()) {
+		const result = handleStreamFrame(buffer, onUpdate);
+		if (result) {
+			if (result.type === "done") {
+				model = result.model;
+				citations = result.citations;
+				toolCalls = result.toolCalls;
+			} else {
+				return { ok: false, error: result.error };
+			}
+		}
+	}
 	if (model) {
 		return {
 			ok: true,
@@ -140,7 +153,7 @@ function handleStreamFrame(
 			continue;
 		}
 		if (event.type === "reasoning" || event.type === "content") {
-			if ("text" in event && typeof event.text === "string" && event.text) {
+			if ("text" in event && typeof event.text === "string" && event.text.length > 0) {
 				onUpdate({ type: event.type, text: event.text });
 			}
 			continue;

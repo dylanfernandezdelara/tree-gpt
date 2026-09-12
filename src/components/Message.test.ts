@@ -165,6 +165,18 @@ describe("MessageView chain of thought", () => {
 		expect(html.indexOf(">Thought<")).toBeLessThan(html.indexOf("Carlos Alcaraz won."));
 	});
 
+	it("renders hydrated sentence spacing without a hard break after the period", () => {
+		const html = render({
+			id: "m4",
+			role: "assistant",
+			createdAt: 4,
+			content: "tonight's games. Tomorrow's opener is set.",
+		});
+		expect(html).toContain("games. Tomorrow");
+		expect(html).not.toMatch(/games\.<\/p>|<br\s*\/?>\s*Tomorrow/);
+		expect(html).not.toContain("games.Tomorrow");
+	});
+
 	it("keeps a line break after a bold title so Muse sections do not smash", () => {
 		const html = render({
 			id: "m3",

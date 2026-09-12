@@ -4,6 +4,7 @@
  */
 import { parseStoredSearchJson, sanitizeCitations, sanitizeToolCalls } from "./search-meta.js";
 import { PENDING_TIMEOUT_MS, type ApiMessage, type ChatSummary, type Role } from "./tree-types.js";
+import { completionContent } from "./unsquash-sentences.js";
 
 export type ChatRow = {
 	id: string;
@@ -220,7 +221,7 @@ export function toApiMessage(row: RenderableRow): ApiMessage {
 	const message: ApiMessage = {
 		id: row.id,
 		role: row.role,
-		content: row.content,
+		content: completionContent(row.role, row.content),
 		createdAt: row.created_at,
 	};
 	if (row.role === "assistant" && row.reasoning) {

@@ -30,6 +30,9 @@
 	/* Everything renders at this fraction of its natural size, like a browser
 	   zoom, so more conversation fits on screen. */
 	--ui-scale: 0.9;
+	/* Viewport units resolve before `html { zoom }`. A zoomed `position: fixed`
+	   box must use this, or `100dvh` paints at `--ui-scale` of the screen. */
+	--visual-dvh: calc(100dvh / var(--ui-scale));
 	--sidebar-width: 260px;
 	--header-height: 52px;
 	--thread-width: 768px;
@@ -101,14 +104,11 @@ button,
 input,
 textarea {
 	font: inherit;
-	color: inherit;
 }
 
-button {
-	padding: 0;
-	border: 0;
-	background: none;
-	cursor: pointer;
+input,
+textarea {
+	color: inherit;
 }
 
 .app {
@@ -378,7 +378,7 @@ button {
 	display: flex;
 	flex-shrink: 0;
 	align-items: center;
-	gap: 4px;
+	gap: 8px;
 	height: var(--header-height);
 	padding: 8px;
 }
@@ -491,7 +491,7 @@ button {
 	line-height: 20px;
 	color: var(--text-secondary);
 	cursor: grab;
-	transition: background 0.12s ease;
+	transition: background 0.12s ease, top 0.25s ease;
 	/* A move handle: no text selection mid-drag, and touch drags work too. */
 	user-select: none;
 	touch-action: none;
@@ -955,6 +955,10 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
+	.user-button--compact {
+		transition: none;
+	}
+
 	.cot-enter {
 		animation: none;
 	}
@@ -1324,15 +1328,101 @@ button {
 	.sidebar {
 		position: fixed;
 		top: 0;
-		bottom: 0;
 		left: 0;
 		z-index: 30;
-		max-height: 100dvh;
+		height: var(--visual-dvh);
 		box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.2);
 	}
 
 	.sidebar--closed {
 		box-shadow: none;
+	}
+
+	:root {
+		--header-height: 68px;
+	}
+
+	.main {
+		position: relative;
+	}
+
+	.main__header {
+		position: absolute;
+		top: 0;
+		right: 0;
+		left: 0;
+		z-index: 20;
+		gap: 10px;
+		padding: 10px 12px;
+		background: var(--surface-main);
+		transition: transform 0.25s ease;
+	}
+
+	.main__header--hidden {
+		transform: translateY(-100%);
+		pointer-events: none;
+	}
+
+	.main__header::after {
+		content: "";
+		position: absolute;
+		top: 100%;
+		right: 0;
+		left: 0;
+		height: 16px;
+		pointer-events: none;
+		background: linear-gradient(to bottom, var(--surface-main), transparent);
+	}
+
+	/* Overlay chrome is out of flow. Only pad when that header is mounted. */
+	.main:has(.main__header) {
+		--chrome-offset: var(--header-height);
+	}
+
+	.thread__inner {
+		padding-top: calc(12px + var(--header-inset) + var(--chrome-offset, 0px));
+	}
+
+	.empty {
+		padding-top: calc(var(--header-inset) + var(--chrome-offset, 0px) + 16px);
+	}
+
+	.bookmarks__header {
+		padding-top: calc(16px + var(--chrome-offset, 0px));
+	}
+
+	.main:has(.main__header) .pane__header,
+	.main:has(.main__header) .pane--headed .thread-top-fade {
+		top: var(--header-height);
+	}
+
+	.main:has(.main__header--hidden) .pane__header,
+	.main:has(.main__header--hidden) .pane--headed .thread-top-fade {
+		top: 0;
+	}
+
+	.sidebar__header {
+		padding: 10px 12px 10px 18px;
+	}
+
+	.main__header-spacer {
+		order: 1;
+	}
+
+	.main__header .user-menu-wrap {
+		order: 3;
+	}
+
+	.main__header .user-button--compact {
+		width: 48px;
+		height: 48px;
+	}
+}
+
+@media (max-width: 768px) and (prefers-reduced-motion: reduce) {
+	.main__header,
+	.pane__header {
+		transition: none;
 	}
 }
 
@@ -1540,6 +1630,11 @@ button {
 	padding: 2px;
 	border-radius: 50%;
 	justify-content: center;
+	transition: transform 150ms ease;
+}
+
+.user-button--compact:active {
+	transform: scale(0.95);
 }
 
 .user-button__text {
@@ -1922,6 +2017,12 @@ button {
   html {
     @apply font-sans;
 	}
+  button {
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
 }
 
 /* ---------- Bookmarks screen ---------- */

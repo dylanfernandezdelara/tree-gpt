@@ -12,6 +12,7 @@ import {
 	type CompletionMessage,
 	type UpstreamEvent,
 } from "./openrouter.js";
+import { completionContent } from "./unsquash-sentences.js";
 import {
 	fail,
 	loadChatRow,
@@ -480,7 +481,12 @@ export async function historyFor(
 	parentId: string,
 ): Promise<CompletionMessage[]> {
 	const rows = await loadPathRows(db, userId, parentId, { doneOnly: true });
-	return capHistory(rows.map((row) => ({ role: row.role, content: row.content })));
+	return capHistory(
+		rows.map((row) => ({
+			role: row.role,
+			content: completionContent(row.role, row.content),
+		})),
+	);
 }
 
 /** Persistence tee branch. Accumulates deltas, then complete or abandon. Never throws. */

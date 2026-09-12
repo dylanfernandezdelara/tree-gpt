@@ -1,4 +1,14 @@
+import { useEffect } from "react";
+
 import { authClient } from "../auth-client";
+import {
+	beginSignOut,
+	cancelSignOut,
+	hasSessionHint,
+	readCachedUser,
+	syncSessionHint,
+	type SessionUserSnapshot,
+} from "./session-hint";
 
 /**
  * Helpers around the shared Better Auth client (`src/auth-client.ts`).
@@ -6,12 +16,7 @@ import { authClient } from "../auth-client";
  */
 export { authClient };
 
-export type AuthUser = {
-	id: string;
-	name: string;
-	email: string;
-	image?: string | null;
-};
+export type AuthUser = SessionUserSnapshot;
 
 /**
  * Extract the signed-in user from a session response. Validates the shape at
@@ -36,6 +41,69 @@ export function sessionUser(session: unknown): AuthUser | null {
 		email: u.email,
 		image: typeof u.image === "string" ? u.image : null,
 	};
+}
+
+/**
+ * First paint: use a cached profile while get-session is in flight. Wait on
+ * the login chrome only when a cookie is expected and we have no profile yet.
+ */
+export function resolveSignedInUser(
+	liveUser: AuthUser | null,
+	isPending: boolean,
+	hint: boolean,
+	cachedUser: AuthUser | null,
+): { user: AuthUser | null; waitForSession: boolean } {
+	const user = liveUser ?? (isPending && hint ? cachedUser : null);
+	return {
+		user,
+		waitForSession: user === null && isPending && hint,
+	};
+}
+
+/**
+ * Better Auth starts /get-session from the session atom's onMount, after a
+ * timeout. Kick that refetch now so it overlaps React's first render.
+ */
+function warmSessionFetch(): void {
+	if (typeof window === "undefined" || !hasSessionHint()) {
+		return;
+	}
+	void authClient.$store.atoms.session.get().refetch();
+}
+
+warmSessionFetch();
+
+/**
+ * Session plus the signed-out first-paint gate. Wait only when a previous
+ * visit recorded that a cookie should exist and we have no cached profile.
+ */
+export function useSignedInUser(): { user: AuthUser | null; waitForSession: boolean } {
+	const session = authClient.useSession();
+	const liveUser = sessionUser(session.data);
+
+	useEffect(() => {
+		if (session.isPending) {
+			return;
+		}
+		syncSessionHint(liveUser);
+	}, [session.isPending, liveUser]);
+
+	return resolveSignedInUser(
+		liveUser,
+		session.isPending,
+		hasSessionHint(),
+		readCachedUser(),
+	);
+}
+
+export async function signOut(): Promise<void> {
+	beginSignOut();
+	try {
+		await authClient.signOut();
+	} catch (error) {
+		cancelSignOut();
+		throw error;
+	}
 }
 
 const AVATAR_COLORS = ["#5fb3a1", "#7c8cf8", "#e6a23c", "#d47bb0", "#6bb1e6", "#8fbf60"];

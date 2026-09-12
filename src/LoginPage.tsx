@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from "react";
 
 import { ForkMarkGrid } from "@/components/ForkMarkGrid";
+import { ForkMarkScatter } from "@/components/ForkMarkScatter";
 import { TreeIcon } from "@/components/Icons";
 import { SocialLoginButton } from "@/components/SocialLoginButton";
 import { authClient } from "./auth-client";
+import { clearSessionHint, markOAuthRedirect } from "./lib/session-hint";
 
 type LoginProvider = "github" | "google";
 
@@ -15,19 +17,17 @@ export function LoginPage() {
 	);
 }
 
-export function LoginPending() {
-	return (
-		<LoginChrome>
-			<p className="text-center text-sm text-muted-foreground">Checking…</p>
-		</LoginChrome>
-	);
-}
-
+// Below lg: marks scattered around the page edges, the logo pinned top-left
+// out of the flow, and the form at the exact center of the viewport. From lg:
+// the two-column layout with the logo in flow and the tiled grid on the right.
 function LoginChrome({ children }: { children: ReactNode }) {
 	return (
-		<div className="grid min-h-full grid-rows-[minmax(0,1fr)_min(36svh,280px)] lg:grid-cols-2 lg:grid-rows-none">
-			<div className="flex min-h-0 flex-col gap-4 p-6 md:p-10">
-				<div className="flex justify-center md:justify-start">
+		<div className="relative grid min-h-full lg:grid-cols-2">
+			<div className="pointer-events-none absolute inset-0 overflow-hidden lg:hidden">
+				<ForkMarkScatter />
+			</div>
+			<div className="relative flex min-h-0 flex-col p-6 md:p-10 lg:gap-4">
+				<div className="absolute top-6 left-6 md:top-10 md:left-10 lg:static lg:flex">
 					<a
 						href="/"
 						className="flex items-center gap-2 rounded-md text-base font-semibold tracking-tight text-foreground outline-none focus-visible:ring-2 focus-visible:ring-[#3a83f7] focus-visible:ring-offset-2"
@@ -40,7 +40,7 @@ function LoginChrome({ children }: { children: ReactNode }) {
 					<div className="w-full max-w-xs">{children}</div>
 				</div>
 			</div>
-			<div className="relative min-h-0 overflow-hidden">
+			<div className="relative hidden lg:block">
 				<ForkMarkGrid />
 			</div>
 		</div>
@@ -56,15 +56,18 @@ function LoginForm() {
 	async function signIn(provider: LoginProvider) {
 		setError(null);
 		setBusy(provider);
+		markOAuthRedirect();
 		try {
 			const { error: nextError } = await authClient.signIn.social({
 				provider,
 				callbackURL: "/",
 			});
 			if (nextError) {
+				clearSessionHint();
 				setError(nextError.message ?? `${provider} sign-in failed`);
 			}
 		} catch {
+			clearSessionHint();
 			setError(`${provider} sign-in failed`);
 		} finally {
 			setBusy(null);
