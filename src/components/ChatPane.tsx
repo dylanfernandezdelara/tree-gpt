@@ -1,5 +1,6 @@
 import {
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 	type DragEvent,
@@ -7,6 +8,7 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 } from "react";
+import { messagesUpTo } from "../lib/fork";
 import {
 	dropSideAt,
 	hasDragPayload,
@@ -473,6 +475,37 @@ export function ChatPane({
 		movePreview && movePreview !== "swap" && accepts(movePreview) ? movePreview : null;
 	const previewSide = nativePreview ?? moveSide;
 	const swapLit = (headerHover && ability.swap) || movePreview === "swap";
+
+	/*
+	 * A pending fork shows only what it will carry. Until the first send this
+	 * pane still holds the SOURCE chat, so without this the reader sees every
+	 * turn after the passage they forked from -- turns the new conversation
+	 * will not have. The anchor is per pane, so the source pane is unaffected.
+	 */
+	const shown = useMemo(
+		() =>
+			chat && thread ? { ...chat, messages: messagesUpTo(chat.messages, thread.messageId) } : chat,
+		[chat, thread],
+	);
+
+	/*
+	 * Forks that diverged below the cut belong to the path being left behind.
+	 * ChatThread drops any fork whose anchor is missing from the conversation
+	 * to the END of the thread -- a sensible fallback for a regenerated
+	 * message, but in a truncated view it would park exactly the forks we just
+	 * hid at the bottom of the pane. Filter them out here instead.
+	 */
+	const shownForks = useMemo(() => {
+		if (!shown || !thread) {
+			return forks;
+		}
+		const ids = new Set(shown.messages.map((message) => message.id));
+		return forks.filter((fork) => {
+			const at = fork.origin?.parentMessageId;
+			return at !== undefined && at !== null && ids.has(at);
+		});
+	}, [forks, shown, thread]);
+
 	const title = chat ? chat.title : "New chat";
 	const headerClass = ["pane__header", swapLit ? "pane__header--target" : ""]
 		.filter(Boolean)
@@ -557,12 +590,12 @@ export function ChatPane({
 					</IconButton>
 				</div>
 			) : null}
-			{chat && chat.messages.length > 0 ? (
+			{shown && shown.messages.length > 0 ? (
 				<ChatThread
-					chat={chat}
+					chat={shown}
 					onRedo={onRedo}
 					composer={composer}
-					forks={forks}
+					forks={shownForks}
 					onOpenFork={onOpenFork}
 					onThread={onThread}
 					onBookmark={onBookmark}

@@ -20,6 +20,7 @@ import {
 	removeBookmark as removeFromList,
 } from "./lib/bookmarks";
 import { ancestorIds, childrenByParent } from "./lib/forest";
+import { messagesUpTo } from "./lib/fork";
 import {
 	clearChat,
 	dropAbility,
@@ -720,8 +721,12 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 			// A fork continues the same conversation, so it inherits the
 			// source chat's locked config rather than the preferences.
 			const config = configFor(chat.id);
-			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
-			const carried = copyMessages(chat.messages);
+			// A fork from a highlighted passage continues from THAT message; the
+			// turns after it belong to the path being left behind, so they are
+			// carried into neither the new chat nor the context sent upstream.
+			const source = messagesUpTo(chat.messages, anchor?.messageId ?? null);
+			const history: ChatTurn[] = [...toTurns(source), { role: "user", content }];
+			const carried = copyMessages(source);
 			// A thread diverges at the highlighted message; a plain branch at the
 			// last turn carried over. Both refer to the parent's message ids.
 			const origin: ForkOrigin = anchor
