@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -29,7 +29,15 @@ type Props = {
 	onRedo: () => void;
 };
 
-export function MessageView({ message, isLast, onRedo }: Props) {
+/**
+ * One turn, memoized on the message itself: chats update immutably, so an
+ * unchanged message object means unchanged output, and layout-only commits
+ * (swaps, resizes) skip every markdown re-parse. `onRedo` is deliberately
+ * ignored -- a fresh closure each render, but the same message always redoes
+ * the same way.
+ */
+export const MessageView = memo(
+	function MessageView({ message, isLast, onRedo }: Props) {
 	if (message.role === "user") {
 		return (
 			<div className="turn turn--user" data-message-id={message.id}>
@@ -75,7 +83,9 @@ export function MessageView({ message, isLast, onRedo }: Props) {
 			<AssistantActions content={content} isLast={isLast} onRedo={onRedo} />
 		</div>
 	);
-}
+	},
+	(prev, next) => prev.message === next.message && prev.isLast === next.isLast,
+);
 
 /** Roomier line-height so wrapped step labels read as prose, not a cramped chip. */
 const stepClass = "leading-6";

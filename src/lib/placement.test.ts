@@ -13,7 +13,7 @@ const split = (
 	direction: "row" | "column",
 	a: LayoutNode,
 	b: LayoutNode,
-): LayoutNode => ({ kind: "split", id, direction, children: [a, b] });
+): LayoutNode => ({ kind: "split", id, direction, size: 50, sized: 0, children: [a, b] });
 
 /** Four equal columns, the widest a row can get under the 4x4 rule. */
 const fourColumns = split(
