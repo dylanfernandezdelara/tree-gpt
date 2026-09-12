@@ -39,8 +39,18 @@ type StoredLayout = { root: unknown; focusedPaneId: string };
 export type SidebarView = "tree" | "flat";
 export type SidebarTree = { view: SidebarView; expanded: string[] };
 
+/** Written with `sidebarOpen` only after the user toggles the sidebar. */
+export const SIDEBAR_PREF_REV = 2;
+
 type UiState = {
-	sidebarOpen: boolean;
+	/**
+	 * The user's last explicit sidebar toggle, or `null` if they have never
+	 * toggled. Older blobs stored `false` as the implicit default on first
+	 * paint; those are treated as unset unless they carry `sidebarPrefRev`.
+	 */
+	sidebarOpen: boolean | null;
+	/** `SIDEBAR_PREF_REV` when `sidebarOpen` is a user choice; otherwise 0. */
+	sidebarPrefRev: number;
 	/** Pre-split-screen layout: the one open chat per namespace. Read for migration only. */
 	activeChatId: Record<string, string | null>;
 	layout: Record<string, StoredLayout>;
@@ -131,8 +141,13 @@ function loadUi(): UiState {
 			];
 		}),
 	) as Record<ModelId, EffortId>;
+	const sidebarPrefRev = record.sidebarPrefRev === SIDEBAR_PREF_REV ? SIDEBAR_PREF_REV : 0;
 	return {
-		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : false,
+		sidebarOpen:
+			sidebarPrefRev === SIDEBAR_PREF_REV && typeof record.sidebarOpen === "boolean"
+				? record.sidebarOpen
+				: null,
+		sidebarPrefRev,
 		activeChatId: active,
 		layout,
 		model: isModelId(record.model) ? record.model : DEFAULT_MODEL,
@@ -245,12 +260,26 @@ export function parseOrigin(value: unknown): ForkOrigin | undefined {
 	};
 }
 
-export function loadSidebarOpen(): boolean {
+/**
+ * Desktop starts expanded and mobile starts collapsed until the user toggles.
+ * A stored preference (collapse or expand) wins on both viewports.
+ */
+export function resolveSidebarOpen(preference: boolean | null, mobile: boolean): boolean {
+	return preference ?? !mobile;
+}
+
+/** The last explicit toggle, or `null` when the user has never chosen. */
+export function loadSidebarOpenPreference(): boolean | null {
 	return loadUi().sidebarOpen;
 }
 
+/** Resolved open state. `mobile` is false (desktop) when omitted. */
+export function loadSidebarOpen(mobile = false): boolean {
+	return resolveSidebarOpen(loadSidebarOpenPreference(), mobile);
+}
+
 export function saveSidebarOpen(open: boolean): void {
-	writeJson(UI_KEY, { ...loadUi(), sidebarOpen: open });
+	writeJson(UI_KEY, { ...loadUi(), sidebarOpen: open, sidebarPrefRev: SIDEBAR_PREF_REV });
 }
 
 export function loadSelectedModel(): ModelId {
@@ -438,8 +467,10 @@ function migrateLegacyState(): void {
 		saveLocalChats(GUEST_NAMESPACE, record.chats.filter(isChat));
 	}
 	const ui = loadUi();
+	const legacyOpen = record.sidebarOpen === true;
 	writeJson(UI_KEY, {
-		sidebarOpen: typeof record.sidebarOpen === "boolean" ? record.sidebarOpen : ui.sidebarOpen,
+		sidebarOpen: legacyOpen ? true : ui.sidebarOpen,
+		...(legacyOpen ? { sidebarPrefRev: SIDEBAR_PREF_REV } : {}),
 		activeChatId: {
 			...ui.activeChatId,
 			[GUEST_NAMESPACE]: typeof record.activeChatId === "string" ? record.activeChatId : null,

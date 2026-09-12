@@ -6,6 +6,7 @@ import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
 import { copyMessages, lastPersistedId, newExchange, toTurns } from "./lib/chat-turns";
+import { MOBILE_CHROME_QUERY } from "./lib/hide-on-scroll";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
 import { signOut, type AuthUser } from "./lib/auth-client";
 import { listChats } from "./lib/chatsApi";
@@ -43,8 +44,9 @@ import {
 	loadLocalChats,
 	loadModelEfforts,
 	loadSelectedModel,
-	loadSidebarOpen,
+	loadSidebarOpenPreference,
 	loadSidebarTree,
+	resolveSidebarOpen,
 	newId,
 	saveBookmarks,
 	saveBookmarksWidth,
@@ -69,9 +71,17 @@ type ThreadAnchor = { messageId: string; quote: string };
 const NO_FORKS: Chat[] = [];
 const NO_BOOKMARKS: Bookmark[] = [];
 
+function isMobileChrome(): boolean {
+	return typeof window !== "undefined" && window.matchMedia(MOBILE_CHROME_QUERY).matches;
+}
+
+function initialSidebarOpen(): boolean {
+	return resolveSidebarOpen(loadSidebarOpenPreference(), isMobileChrome());
+}
+
 export default function ChatApp({ user }: { user: AuthUser }) {
 	const [store, setStore] = useState<Store | null>(null);
-	const [sidebarOpen, setSidebarOpen] = useState(loadSidebarOpen);
+	const [sidebarOpen, setSidebarOpenState] = useState(initialSidebarOpen);
 	const mainRef = useRef<HTMLElement>(null);
 	const [model, setModel] = useState(loadSelectedModel);
 	/** Reasoning effort per model. Each model remembers its own setting. */
@@ -186,9 +196,27 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 		saveLayout(store.ns, store.layout, store.focusedPaneId);
 	}, [store]);
 
+	// Follow the viewport default until the user toggles. A stored preference
+	// is left alone so a collapse on desktop stays collapsed after a resize.
 	useEffect(() => {
-		saveSidebarOpen(sidebarOpen);
-	}, [sidebarOpen]);
+		if (loadSidebarOpenPreference() !== null) {
+			return;
+		}
+		const mq = window.matchMedia(MOBILE_CHROME_QUERY);
+		const onChange = () => {
+			if (loadSidebarOpenPreference() !== null) {
+				return;
+			}
+			setSidebarOpenState(!mq.matches);
+		};
+		mq.addEventListener("change", onChange);
+		return () => mq.removeEventListener("change", onChange);
+	}, []);
+
+	function persistSidebarOpen(open: boolean) {
+		setSidebarOpenState(open);
+		saveSidebarOpen(open);
+	}
 
 	useEffect(() => {
 		saveSelectedModel(model);
@@ -885,7 +913,7 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 				chats={sortedChats}
 				activeChatId={focusedPane?.chatId ?? null}
 				open={sidebarOpen}
-				onToggle={() => setSidebarOpen((open) => !open)}
+				onToggle={() => persistSidebarOpen(!sidebarOpen)}
 				onNewChat={newChat}
 				onSelect={selectChat}
 				onRename={renameChat}
@@ -911,7 +939,7 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 				{sidebarOpen ? null : (
 					<MainHeader
 						scrollRoot={mainRef}
-						onOpenSidebar={() => setSidebarOpen(true)}
+						onOpenSidebar={() => persistSidebarOpen(true)}
 						onNewChat={newChat}
 						user={user}
 						onLogOut={logOut}
