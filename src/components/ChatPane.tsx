@@ -389,8 +389,8 @@ export function ChatPane({
 			}
 			finish(false);
 		}
-		function key(pointer: KeyboardEvent) {
-			if (pointer.key === "Escape") {
+		function key(event: KeyboardEvent) {
+			if (event.key === "Escape") {
 				finish(false);
 			}
 		}
@@ -398,9 +398,17 @@ export function ChatPane({
 			finish(false);
 		}
 		function dropped(pointer: PointerEvent) {
-			// Capture died without a release reaching us (the browser took the
-			// gesture for its own drag or scroll): land instead of stranding.
-			if (pointer.pointerId === pointerId && active) {
+			// Capture died, but the gesture may be fine: touch browsers yank and
+			// re-deal it mid-gesture (the compositor's scroll check runs ~30ms in)
+			// with no pointercancel and moves still flowing. So take it back and
+			// carry on; only a dead pointer lands the pane. A real takeover ends
+			// in pointercancel, which finishes through the cancel path.
+			if (pointer.pointerId !== pointerId || !active) {
+				return;
+			}
+			try {
+				header.setPointerCapture(pointer.pointerId);
+			} catch {
 				finish(false);
 			}
 		}
