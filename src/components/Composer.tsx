@@ -11,6 +11,16 @@ import { BorderBeam } from "border-beam";
 import { SendIcon, StopIcon } from "./Icons";
 
 const MAX_HEIGHT = 208;
+
+/** Grow the field to its text, up to MAX_HEIGHT, then scroll inside it. */
+function fitToContent(el: HTMLTextAreaElement | null) {
+	if (!el) {
+		return;
+	}
+	el.style.height = "auto";
+	el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
+	el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? "auto" : "hidden";
+}
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 
 function usePrefersReducedMotion() {
@@ -59,15 +69,42 @@ export function Composer({
 	const canSend = value.trim() !== "" && !busy;
 	const reduceMotion = usePrefersReducedMotion();
 
+	// Before paint, so typing never shows a stale box.
 	useLayoutEffect(() => {
+		fitToContent(textareaRef.current);
+	}, [value, textareaRef]);
+
+	/*
+	 * Again after paint, because the mount measurement can be taken mid-reflow.
+	 * Closing a split pane remounts the survivor's composer while the layout is
+	 * still collapsing, and `scrollHeight` read then comes back as the previous
+	 * pane's -- an empty box stuck at MAX_HEIGHT, with nothing to correct it
+	 * since the effect above only reruns when `value` changes.
+	 */
+	useEffect(() => {
+		fitToContent(textareaRef.current);
+	}, [textareaRef]);
+
+	// And whenever the field is re-laid out: a sidebar toggle, a window resize
+	// or a horizontal split all rewrap the text at a width nothing else watches.
+	useEffect(() => {
 		const el = textareaRef.current;
-		if (!el) {
+		if (!el || typeof ResizeObserver === "undefined") {
 			return;
 		}
-		el.style.height = "auto";
-		el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
-		el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? "auto" : "hidden";
-	}, [value, textareaRef]);
+		let lastWidth = el.getBoundingClientRect().width;
+		const observer = new ResizeObserver((entries) => {
+			const width = entries[0]?.contentRect.width ?? 0;
+			// Ignore the height changes this very callback causes.
+			if (Math.abs(width - lastWidth) < 0.5) {
+				return;
+			}
+			lastWidth = width;
+			fitToContent(el);
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [textareaRef]);
 
 	function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
