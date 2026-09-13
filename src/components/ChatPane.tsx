@@ -30,6 +30,9 @@ import { CloseIcon } from "./Icons";
 import { ModelSelector } from "./ModelSelector";
 import type { EffortId, ModelId } from "../../worker/tree-types";
 
+/** Stable empty list, so a pending fork does not remount ChatThread's grouping. */
+const NO_FORKS: Chat[] = [];
+
 /** Where a drop would land: an edge or middle of the body, or the header. */
 type DropTarget = DropSide | "swap";
 
@@ -489,22 +492,14 @@ export function ChatPane({
 	);
 
 	/*
-	 * Forks that diverged below the cut belong to the path being left behind.
-	 * ChatThread drops any fork whose anchor is missing from the conversation
-	 * to the END of the thread -- a sensible fallback for a regenerated
-	 * message, but in a truncated view it would park exactly the forks we just
-	 * hid at the bottom of the pane. Filter them out here instead.
+	 * A pending fork shows no fork links at all. They belong to the SOURCE
+	 * conversation -- siblings of the branch being started, not of it -- and
+	 * the chat this pane is about to become has none. Leaving them up previews
+	 * links that vanish on the first send; ChatThread would also park any whose
+	 * anchor fell below the cut at the END of the thread, reinstating exactly
+	 * the forks the truncation just hid.
 	 */
-	const shownForks = useMemo(() => {
-		if (!shown || !thread) {
-			return forks;
-		}
-		const ids = new Set(shown.messages.map((message) => message.id));
-		return forks.filter((fork) => {
-			const at = fork.origin?.parentMessageId;
-			return at !== undefined && at !== null && ids.has(at);
-		});
-	}, [forks, shown, thread]);
+	const shownForks = thread ? NO_FORKS : forks;
 
 	const title = chat ? chat.title : "New chat";
 	const headerClass = ["pane__header", swapLit ? "pane__header--target" : ""]
