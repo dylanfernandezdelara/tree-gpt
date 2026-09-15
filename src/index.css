@@ -1163,6 +1163,11 @@ textarea {
 	background: rgba(58, 131, 247, 0.28);
 }
 
+/* The passage the source chat was forked from; stays after the native selection is stolen. */
+::highlight(treegpt-fork) {
+	background: rgba(58, 131, 247, 0.2);
+}
+
 .turn--highlight {
 	border-radius: 12px;
 	background: rgba(58, 131, 247, 0.12);

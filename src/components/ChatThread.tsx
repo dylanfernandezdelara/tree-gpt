@@ -2,6 +2,7 @@ import {
 	Fragment,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -9,6 +10,11 @@ import {
 	type ReactNode,
 	type UIEvent,
 } from "react";
+import {
+	rememberThreadView,
+	scrollTopForMount,
+	takeThreadView,
+} from "../lib/thread-view";
 import { useAutoHideScrollbar } from "../lib/use-auto-hide-scrollbar";
 import { visualScale } from "../lib/zoom";
 import type { Chat } from "../types";
@@ -41,10 +47,13 @@ type Props = {
 	highlight: { messageId: string; quote: string; nonce: number } | null;
 	/** This pane has focus, so it may show its scrollbar for any scroll. */
 	focused: boolean;
+	/** Stable pane id, used to restore scroll after a Fork remount. */
+	paneId: string;
 };
 
 /** Paints without touching the DOM, so React's markdown output is untouched. */
 const HIGHLIGHT_NAME = "treegpt-bookmark";
+const FORK_HIGHLIGHT_NAME = "treegpt-fork";
 const HIGHLIGHT_MS = 2500;
 
 /**
@@ -62,10 +71,14 @@ export function ChatThread({
 	onBookmark,
 	highlight,
 	focused,
+	paneId,
 }: Props) {
 	const threadRef = useRef<HTMLDivElement>(null);
 	const floatRef = useRef<HTMLDivElement>(null);
 	const scrolledUpRef = useRef(false);
+	const stuckRef = useRef(false);
+	const forkQuoteRef = useRef<{ messageId: string; quote: string } | undefined>(undefined);
+	const ignoreSelectionRef = useRef(false);
 	const [scrolledUp, setScrolledUp] = useState(false);
 	const [inset, setInset] = useState(INITIAL_INSET);
 	const [anchor, setAnchor] = useState<Anchor | null>(null);
@@ -110,14 +123,48 @@ export function ChatThread({
 		}
 	}, []);
 
-	// Keep the newest turn in view when a chat opens, a message is added, or a reply lands.
-	useEffect(() => {
+	useLayoutEffect(() => {
+		stuckRef.current = false;
+	}, [paneId]);
+
+	// Keep the newest turn in view when a chat opens, a message is added, or a
+	// reply lands. A Fork remount is different: the source pane must sit still.
+	useLayoutEffect(() => {
 		const thread = threadRef.current;
-		if (thread) {
-			thread.scrollTop = thread.scrollHeight;
-			report(thread);
+		if (!thread) {
+			return;
 		}
-	}, [chat.id, count, lastId, lastPending, report]);
+		if (!stuckRef.current) {
+			stuckRef.current = true;
+			const saved = takeThreadView(paneId);
+			if (saved?.quote) {
+				forkQuoteRef.current = saved.quote;
+			}
+			thread.scrollTop = scrollTopForMount(
+				saved,
+				thread.scrollHeight,
+				thread.clientHeight,
+			);
+			report(thread);
+			if (saved?.quote) {
+				paintForkedPassage(thread, saved.quote);
+				restoreSelection(thread, saved.quote, ignoreSelectionRef);
+			}
+			return;
+		}
+		thread.scrollTop = thread.scrollHeight;
+		report(thread);
+	}, [chat.id, count, lastId, lastPending, paneId, report]);
+
+	useLayoutEffect(() => {
+		const thread = threadRef.current;
+		return () => {
+			rememberThreadView(paneId, {
+				scrollTop: thread?.scrollTop ?? 0,
+				quote: forkQuoteRef.current,
+			});
+		};
+	}, [paneId]);
 
 	// Track the composer's height so padding and the fade follow a growing textarea.
 	useEffect(() => {
@@ -161,10 +208,8 @@ export function ChatThread({
 		}
 		message.scrollIntoView({ block: "center" });
 		const range = findQuote(message, highlight.quote);
-		const highlights = (
-			CSS as unknown as { highlights?: Map<string, unknown> & { delete(k: string): void } }
-		).highlights;
-		const Ctor = (window as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+		const highlights = cssHighlights();
+		const Ctor = HighlightCtor();
 		if (range && highlights && Ctor) {
 			highlights.set(HIGHLIGHT_NAME, new Ctor(range));
 			const timer = window.setTimeout(() => highlights.delete(HIGHLIGHT_NAME), HIGHLIGHT_MS);
@@ -191,6 +236,10 @@ export function ChatThread({
 	 */
 	useEffect(() => {
 		function read() {
+			if (ignoreSelectionRef.current) {
+				ignoreSelectionRef.current = false;
+				return;
+			}
 			const thread = threadRef.current;
 			const selection = window.getSelection();
 			if (!thread || !selection || selection.isCollapsed || selection.rangeCount === 0) {
@@ -236,12 +285,34 @@ export function ChatThread({
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [anchor]);
 
-	function act(run: (messageId: string, quote: string) => void) {
+	function act(run: (messageId: string, quote: string) => void, keepSelection: boolean) {
 		if (!anchor) {
 			return;
 		}
-		run(anchor.messageId, anchor.quote);
-		window.getSelection()?.removeAllRanges();
+		const { messageId, quote } = anchor;
+		if (keepSelection) {
+			const thread = threadRef.current;
+			forkQuoteRef.current = { messageId, quote };
+			rememberThreadView(paneId, {
+				scrollTop: thread?.scrollTop ?? 0,
+				quote: { messageId, quote },
+			});
+			if (thread) {
+				paintForkedPassage(thread, { messageId, quote });
+			}
+		}
+		run(messageId, quote);
+		if (!keepSelection) {
+			window.getSelection()?.removeAllRanges();
+		} else {
+			const passage = { messageId, quote };
+			window.requestAnimationFrame(() => {
+				const thread = threadRef.current;
+				if (thread?.isConnected) {
+					restoreSelection(thread, passage, ignoreSelectionRef);
+				}
+			});
+		}
 		setAnchor(null);
 	}
 
@@ -290,12 +361,12 @@ export function ChatThread({
 					style={{ left: anchor.left, top: anchor.top }}
 					onMouseDown={(event) => event.preventDefault()}
 				>
-					<button type="button" className="selection-action" onClick={() => act(onThread)}>
+					<button type="button" className="selection-action" onClick={() => act(onThread, true)}>
 						<ForkIcon />
 						Fork
 					</button>
 					<span className="selection-bar__divider" aria-hidden="true" />
-					<button type="button" className="selection-action" onClick={() => act(onBookmark)}>
+					<button type="button" className="selection-action" onClick={() => act(onBookmark, false)}>
 						<BookmarkIcon />
 						Bookmark
 					</button>
@@ -329,6 +400,77 @@ function ForkLinks({ forks, onOpen }: { forks?: Chat[]; onOpen: (chatId: string)
 			))}
 		</div>
 	);
+}
+
+function cssHighlights():
+	| (Map<string, unknown> & { delete(k: string): void; set(k: string, v: unknown): void })
+	| undefined {
+	return (
+		CSS as unknown as {
+			highlights?: Map<string, unknown> & { delete(k: string): void; set(k: string, v: unknown): void };
+		}
+	).highlights;
+}
+
+function HighlightCtor(): (new (...r: Range[]) => unknown) | undefined {
+	return (window as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+}
+
+/** Tint the forked passage without scrolling to it. */
+function paintForkedPassage(
+	thread: HTMLElement,
+	quote: { messageId: string; quote: string },
+): void {
+	const message = thread.querySelector<HTMLElement>(
+		`[data-message-id="${CSS.escape(quote.messageId)}"]`,
+	);
+	if (!message) {
+		return;
+	}
+	const range = findQuote(message, quote.quote);
+	const highlights = cssHighlights();
+	const Ctor = HighlightCtor();
+	if (range && highlights && Ctor) {
+		highlights.set(FORK_HIGHLIGHT_NAME, new Ctor(range));
+		return;
+	}
+	message.classList.add("turn--highlight");
+}
+
+function restoreNativeSelection(
+	thread: HTMLElement,
+	quote: { messageId: string; quote: string },
+): void {
+	const message = thread.querySelector<HTMLElement>(
+		`[data-message-id="${CSS.escape(quote.messageId)}"]`,
+	);
+	if (!message) {
+		return;
+	}
+	const range = findQuote(message, quote.quote);
+	if (!range) {
+		return;
+	}
+	const selection = window.getSelection();
+	selection?.removeAllRanges();
+	selection?.addRange(range);
+}
+
+/** Now, and once more after the new pane steals focus. */
+function restoreSelection(
+	thread: HTMLElement,
+	quote: { messageId: string; quote: string },
+	ignore: { current: boolean },
+): void {
+	const apply = (node: HTMLElement) => {
+		if (!node.isConnected) {
+			return;
+		}
+		ignore.current = true;
+		restoreNativeSelection(node, quote);
+	};
+	apply(thread);
+	window.requestAnimationFrame(() => apply(thread));
 }
 
 /** A range over the first occurrence of `quote` inside a message, if present. */
