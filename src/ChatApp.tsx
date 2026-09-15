@@ -67,7 +67,7 @@ import {
 	type SidebarTree,
 } from "./lib/storage";
 import type { Bookmark, Chat, Citation, ForkOrigin, Message, ToolCall } from "./types";
-import type { EffortId, ModelId } from "../worker/tree-types";
+import { MAX_REASONING, type EffortId, type ModelId } from "../worker/tree-types";
 
 const NO_CHATS: Chat[] = [];
 
@@ -596,7 +596,9 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 		const applyUpdate = (update: StreamUpdate) => {
 			switch (update.type) {
 				case "reasoning":
-					reasoning += update.text;
+					if (reasoning.length < MAX_REASONING) {
+						reasoning += update.text.slice(0, MAX_REASONING - reasoning.length);
+					}
 					break;
 				case "content":
 					content += update.text;
