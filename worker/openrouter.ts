@@ -665,21 +665,68 @@ function readDelta(payload: object): { content?: string; reasoning?: string } | 
 			out.content = content;
 		}
 	}
-	const texts: string[] = [];
-	if ("reasoning" in delta && typeof delta.reasoning === "string" && delta.reasoning) {
-		texts.push(delta.reasoning);
-	}
-	if ("reasoning_details" in delta && Array.isArray(delta.reasoning_details)) {
-		for (const item of delta.reasoning_details) {
-			if (typeof item === "object" && item !== null && "text" in item && typeof item.text === "string") {
-				texts.push(item.text);
-			}
-		}
-	}
-	if (texts.length > 0) {
-		out.reasoning = texts.join("");
+	const reasoning = reasoningFromDelta(delta);
+	if (reasoning) {
+		out.reasoning = reasoning;
 	}
 	return out.content || out.reasoning ? out : null;
+}
+
+/** Visible thinking only. Encrypted blobs and `[REDACTED]` are not displayable. */
+function displayReasoningChunk(value: unknown): string | null {
+	if (typeof value !== "string" || value.length === 0 || value === "[REDACTED]") {
+		return null;
+	}
+	return value;
+}
+
+/**
+ * Prefer structured `reasoning_details` (text / summary) so we do not
+ * concatenate the same delta twice when OpenRouter also mirrors it on
+ * `reasoning`. Encrypted-only details fall through to those string fields.
+ */
+function reasoningFromDelta(delta: object): string | undefined {
+	if ("reasoning_details" in delta) {
+		const fromDetails = reasoningFromDetails(delta.reasoning_details);
+		if (fromDetails) {
+			return fromDetails;
+		}
+	}
+	if ("reasoning" in delta) {
+		const text = displayReasoningChunk(delta.reasoning);
+		if (text) {
+			return text;
+		}
+	}
+	if ("reasoning_content" in delta) {
+		const text = displayReasoningChunk(delta.reasoning_content);
+		if (text) {
+			return text;
+		}
+	}
+	return undefined;
+}
+
+function reasoningFromDetails(details: unknown): string | undefined {
+	if (!Array.isArray(details)) {
+		return undefined;
+	}
+	const texts: string[] = [];
+	for (const item of details) {
+		if (typeof item !== "object" || item === null) {
+			continue;
+		}
+		if ("type" in item && item.type === "reasoning.encrypted") {
+			continue;
+		}
+		const text =
+			displayReasoningChunk("text" in item ? item.text : undefined) ??
+			displayReasoningChunk("summary" in item ? item.summary : undefined);
+		if (text) {
+			texts.push(text);
+		}
+	}
+	return texts.length > 0 ? texts.join("") : undefined;
 }
 
 function parseCompletionRequest(

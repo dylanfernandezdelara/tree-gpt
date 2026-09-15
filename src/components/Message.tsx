@@ -1,8 +1,8 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { GlobeIcon, LightbulbIcon, SearchIcon } from "lucide-react";
+import { GlobeIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
 import type { Citation, Message, ToolCall } from "../types";
 import { IconButton } from "./IconButton";
@@ -91,20 +91,25 @@ export const MessageView = memo(
 const stepClass = "leading-6";
 
 /**
- * Thinking + search trace for one assistant turn, live or landed, as one
- * linear rail: reasoning paragraphs, then each search query, then each
- * visited URL. The header (with the orb while live) is the only status word;
- * steps are real activity only. Open while streaming, collapsed to a single
- * "Thought" row once the reply lands.
+ * Thinking + search trace for one assistant turn, live or landed.
+ * Reasoning is a stream of consciousness (not step chips): visible while
+ * tokens arrive, then tucked into the collapsed "Thought" row. Search
+ * queries and visited URLs stay on the rail as steps.
  */
 function Thinking({ message }: { message: Message }) {
 	const pending = message.pending === true;
 	const toolCalls = message.toolCalls ?? [];
 	const citations = message.citations ?? [];
-	const paragraphs = reasoningParagraphs(message.reasoning);
+	const reasoning = message.reasoning ?? "";
+	const hasReasoning = reasoning.trim().length > 0;
 	const searching = toolCalls.some((call) => call.state === "input-available");
+	const [open, setOpen] = useState(pending);
 
-	if (!pending && toolCalls.length === 0 && citations.length === 0 && paragraphs.length === 0) {
+	useEffect(() => {
+		setOpen(pending);
+	}, [pending]);
+
+	if (!pending && toolCalls.length === 0 && citations.length === 0 && !hasReasoning) {
 		return null;
 	}
 
@@ -115,50 +120,62 @@ function Thinking({ message }: { message: Message }) {
 	) : undefined;
 
 	return (
-		<ChainOfThought className="mb-3" defaultOpen={pending}>
+		<ChainOfThought className="mb-3" open={pending || open} onOpenChange={setOpen}>
 			<ChainOfThoughtHeader icon={icon}>{header}</ChainOfThoughtHeader>
-			<ChainOfThoughtContent className="space-y-3">
-				{paragraphs.map((paragraph, index) => (
-					<ChainOfThoughtStep
-						key={`reasoning-${index}`}
-						icon={LightbulbIcon}
-						status={pending && !message.content ? "active" : "complete"}
-						className={stepClass}
-						label={<span className="[overflow-wrap:anywhere]">{paragraph}</span>}
-					/>
-				))}
-				{toolCalls.map((call) => (
-					<ChainOfThoughtStep
-						key={call.id}
-						icon={SearchIcon}
-						status={searchStatus(call)}
-						className={stepClass}
-						label={searchLabel(call)}
-					/>
-				))}
-				{citations.map((citation) => (
-					<ChainOfThoughtStep
-						key={citation.url}
-						icon={GlobeIcon}
-						status={pending ? "active" : "complete"}
-						className={stepClass}
-						label={<CitationLink citation={citation} />}
-					/>
-				))}
-			</ChainOfThoughtContent>
+			{pending && hasReasoning ? <ReasoningTrace text={reasoning} live /> : null}
+			{(!pending && hasReasoning) || toolCalls.length > 0 || citations.length > 0 ? (
+				<ChainOfThoughtContent className="space-y-3">
+					{!pending && hasReasoning ? <ReasoningTrace text={reasoning} /> : null}
+					{toolCalls.map((call) => (
+						<ChainOfThoughtStep
+							key={call.id}
+							icon={SearchIcon}
+							status={searchStatus(call)}
+							className={stepClass}
+							label={searchLabel(call)}
+						/>
+					))}
+					{citations.map((citation) => (
+						<ChainOfThoughtStep
+							key={citation.url}
+							icon={GlobeIcon}
+							status={pending ? "active" : "complete"}
+							className={stepClass}
+							label={<CitationLink citation={citation} />}
+						/>
+					))}
+				</ChainOfThoughtContent>
+			) : null}
 		</ChainOfThought>
 	);
 }
 
-/** Split display reasoning on blank lines / newlines into one step per paragraph. */
-function reasoningParagraphs(reasoning: string | undefined): string[] {
-	if (!reasoning) {
-		return [];
-	}
-	return reasoning
-		.split(/\n+/)
-		.map((paragraph) => paragraph.trim())
-		.filter((paragraph) => paragraph.length > 0);
+/** Display-only thinking trace: growing prose live, readable after the turn. */
+function ReasoningTrace({ text, live }: { text: string; live?: boolean }) {
+	const ref = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		if (!live) {
+			return;
+		}
+		const node = ref.current;
+		if (node) {
+			node.scrollTop = node.scrollHeight;
+		}
+	}, [text, live]);
+
+	return (
+		<div
+			ref={ref}
+			className={
+				live
+					? "mt-2 max-h-48 overflow-y-auto text-sm leading-6 text-muted-foreground whitespace-pre-wrap [overflow-wrap:anywhere]"
+					: "text-sm leading-6 text-muted-foreground whitespace-pre-wrap [overflow-wrap:anywhere]"
+			}
+		>
+			{text}
+		</div>
+	);
 }
 
 function searchStatus(call: ToolCall): "active" | "complete" | "pending" {

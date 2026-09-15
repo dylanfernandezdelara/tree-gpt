@@ -317,6 +317,41 @@ describe("handleOpenRouterRequest", () => {
 		]);
 	});
 
+	it("streams summary and reasoning_content as display-only reasoning", async () => {
+		const frames = [
+			`data: {"model":"openai/gpt-5.6-luna","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"Checking the score."}]}}]}\n\n`,
+			`data: {"model":"openai/gpt-5.6-luna","choices":[{"delta":{"reasoning_content":" Luna thought"}}]}\n\n`,
+			`data: {"model":"openai/gpt-5.6-luna","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}]}}]}\n\n`,
+			`data: {"model":"openai/gpt-5.6-luna","choices":[{"delta":{"reasoning":"[REDACTED]"}}]}\n\n`,
+			`data: {"model":"openai/gpt-5.6-luna","choices":[{"delta":{"content":"Alcaraz won."}}]}\n\n`,
+			`data: [DONE]\n\n`,
+		];
+		fetchMock.mockResolvedValue(new Response(frames.join(""), { status: 200 }));
+		const request = new Request("http://localhost:5173/api/openrouter", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				message: "who won",
+				stream: true,
+				model: "openai/gpt-5.6-luna",
+				effort: "low",
+			}),
+		});
+
+		const response = await handleOpenRouterRequest(request, env());
+		expect(response.status).toBe(200);
+		const events = String(await response.text())
+			.split("\n\n")
+			.filter((frame) => frame.startsWith("data:"))
+			.map((frame) => JSON.parse(frame.slice(5).trim()) as Record<string, unknown>);
+		expect(events).toEqual([
+			{ type: "reasoning", text: "Checking the score." },
+			{ type: "reasoning", text: " Luna thought" },
+			{ type: "content", text: "Alcaraz won." },
+			{ type: "done", model: "openai/gpt-5.6-luna" },
+		]);
+	});
+
 	it("reads array content parts on the stream, including a space-only frame", async () => {
 		const frames = [
 			`data: {"choices":[{"delta":{"content":[{"type":"text","text":"Hello"}]}}]}\n\n`,

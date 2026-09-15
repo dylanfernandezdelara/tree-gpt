@@ -123,7 +123,7 @@ describe("MessageView chain of thought", () => {
 		expect(html).not.toContain('aria-label="Composing…"');
 	});
 
-	it("shows each reasoning paragraph as a lightbulb step under a Thinking header", () => {
+	it("streams reasoning text under a Thinking header instead of step chips", () => {
 		const html = render({
 			...searched,
 			content: "",
@@ -136,8 +136,9 @@ describe("MessageView chain of thought", () => {
 		expect(count(html, ">Thinking<")).toBe(1);
 		expect(html).toContain("Identifying the winner.");
 		expect(html).toContain("Checking the final score.");
-		expect(count(html, "lucide-lightbulb")).toBe(2);
-		expect(html).toContain("leading-6");
+		expect(html).toContain("whitespace-pre-wrap");
+		expect(html).toContain("max-h-48");
+		expect(html).not.toContain("lucide-lightbulb");
 		expect(html).not.toContain("Searching<");
 	});
 
@@ -187,6 +188,26 @@ describe("MessageView chain of thought", () => {
 		});
 		expect(html).toMatch(/tangent<\/strong><br\s*\/?>\s*Fork the whole chat/);
 		expect(html).not.toContain("tangent</strong> Fork");
+	});
+
+	it("keeps persisted reasoning inside the landed Thought row", () => {
+		const html = render({
+			id: "m5",
+			role: "assistant",
+			createdAt: 5,
+			content: "Carlos Alcaraz won.",
+			reasoning: "The final was already posted.",
+		});
+		expect(html).toContain(">Thought<");
+		expect(html).not.toContain(">Thinking<");
+		expect(html).toContain("Carlos Alcaraz won.");
+		expect(html).toContain("lucide-brain");
+		expect(html).not.toContain("max-h-48");
+		// Closed Base UI panels may omit children from static markup.
+		if (html.includes("The final was already posted.")) {
+			expect(html).toContain("whitespace-pre-wrap");
+			expect(html).not.toContain("lucide-lightbulb");
+		}
 	});
 
 	it("omits the chain entirely on a plain landed reply", () => {
