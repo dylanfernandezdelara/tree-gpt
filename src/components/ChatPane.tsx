@@ -144,7 +144,7 @@ export function ChatPane({
 	// including when an existing pane was reused and so never remounted.
 	useEffect(() => {
 		if (thread) {
-			inputRef.current?.focus();
+			inputRef.current?.focus({ preventScroll: true });
 		}
 	}, [thread]);
 
@@ -596,6 +596,7 @@ export function ChatPane({
 					onBookmark={onBookmark}
 					highlight={highlight}
 					focused={focused}
+					paneId={pane.id}
 				/>
 			) : (
 				<EmptyState paneId={pane.id}>
