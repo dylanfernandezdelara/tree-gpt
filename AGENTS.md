@@ -20,6 +20,10 @@ npm run dev
 
 Use `localhost`, not `127.0.0.1`.
 
+## Repo contents
+
+Never commit screenshots, recordings, walkthrough artifacts, `proof/` files, or other review-only media. Those do not belong in this repository. Do not merge unused or speculative code.
+
 ## Agent worktrees
 
 - This is an AI-native codebase: always push to remote `main`. Merging locally into `main` and pushing is the expected flow.
