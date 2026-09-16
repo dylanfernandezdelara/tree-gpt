@@ -29,3 +29,7 @@ dist-ssr
 !.dev.vars.example
 .env*
 !.env.example
+
+# Review / agent walkthrough artifacts — never commit
+/proof
+/artifacts
