@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BookmarksView } from "./components/BookmarksView";
+import { ReplyPopup } from "./components/ReplyPopup";
 import { ChatPane } from "./components/ChatPane";
 import { groundStrayPanes } from "./lib/paneLift";
 import { MainHeader } from "./components/MainHeader";
 import { PaneLayout } from "./components/PaneLayout";
 import { Sidebar } from "./components/Sidebar";
 import { sendChatStream, type ChatTurn, type StreamUpdate } from "./lib/api";
-import { copyMessages, lastPersistedId, newExchange, toTurns } from "./lib/chat-turns";
+import {
+	copyMessages,
+	lastPersistedId,
+	newExchange,
+	quoteTurn,
+	toReplyTurns,
+	toTurns,
+} from "./lib/chat-turns";
 import { MOBILE_CHROME_QUERY } from "./lib/hide-on-scroll";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
 import { signOut, type AuthUser } from "./lib/auth-client";
@@ -21,6 +29,7 @@ import {
 } from "./lib/bookmarks";
 import { ancestorIds, childrenByParent } from "./lib/forest";
 import { messagesUpTo } from "./lib/fork";
+import { clearInline, dropInlineFor, listableChats, markInline, replyKey } from "./lib/replies";
 import {
 	clearChat,
 	dropAbility,
@@ -45,6 +54,7 @@ import {
 import {
 	loadBookmarks,
 	loadBookmarksWidth,
+	loadInlineReplies,
 	loadLayout,
 	loadLineage,
 	loadLocalChats,
@@ -55,6 +65,7 @@ import {
 	resolveSidebarOpen,
 	newId,
 	saveBookmarks,
+	saveInlineReplies,
 	saveBookmarksWidth,
 	saveLayout,
 	saveLineage,
@@ -72,10 +83,31 @@ import { MAX_REASONING, type EffortId, type ModelId } from "../worker/tree-types
 const NO_CHATS: Chat[] = [];
 
 /** A highlighted passage a pane will fork from once something is sent. */
-type ThreadAnchor = { messageId: string; quote: string };
+/** Where a pending fork diverges. `quote` only when it came from a highlight. */
+type ThreadAnchor = { messageId: string; quote?: string };
+
+/** One reply popup. `carried` is how many messages the fork inherited, so the
+ *  popup can show only what was added after it. */
+type ReplyState = {
+	chatId: string | null;
+	messageId: string;
+	quote?: string;
+	draft: string;
+	carried: number;
+};
+
+function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
+	if (!(key in record)) {
+		return record;
+	}
+	const next = { ...record };
+	delete next[key];
+	return next;
+}
 
 const NO_FORKS: Chat[] = [];
 const NO_BOOKMARKS: Bookmark[] = [];
+const NO_INLINE_REPLIES: string[] = [];
 
 /** Whether a pointer hover is a legal pane drop; mirrors the drop handler's recheck. */
 function moveLegal(
@@ -125,6 +157,14 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 	const moveRectsRef = useRef<readonly PaneRect[]>([]);
 	/** Pending threads per pane; transient like drafts. */
 	const [threads, setThreads] = useState<Record<string, ThreadAnchor>>({});
+	/**
+	 * Reply popups, keyed `${paneId}:${messageId}` because the same chat can be
+	 * open in two panes and each gets its own. `chatId` is null until the first
+	 * send creates the fork behind it.
+	 */
+	const [replies, setReplies] = useState<Record<string, ReplyState>>({});
+	/** One popup at a time: it behaves as a popover and closes on click-away. */
+	const [openReply, setOpenReply] = useState<string | null>(null);
 	/**
 	 * Bumped to replay the focus ring when nothing else about the focused pane
 	 * changed, e.g. a fork link pointing at the pane you are already on.
@@ -202,6 +242,7 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 				layout: layout.root,
 				focusedPaneId: layout.focusedPaneId,
 				bookmarks: loadBookmarks(ns),
+				inlineReplies: loadInlineReplies(ns),
 				bookmarkLayout: null,
 				bookmarkFocusedPaneId: null,
 			});
@@ -262,6 +303,8 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 	const chats = active?.chats ?? NO_CHATS;
 	const view = active?.view ?? "chats";
 	const bookmarks = active?.bookmarks ?? NO_BOOKMARKS;
+	const inlineReplies = active?.inlineReplies ?? NO_INLINE_REPLIES;
+	const inlineReplySet = useMemo(() => new Set(inlineReplies), [inlineReplies]);
 	const activeLayout = active ? layoutOf(active) : null;
 	const panes = useMemo(() => (activeLayout ? listPanes(activeLayout) : []), [activeLayout]);
 	const focusedPaneId = active ? focusedOf(active) : null;
@@ -275,6 +318,15 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 		[chats],
 	);
 	const chatById = useMemo(() => new Map(chats.map((chat) => [chat.id, chat])), [chats]);
+	/**
+	 * What the sidebar and the fork tree list. Inline replies are left out so a
+	 * one-word lookup does not land in the chat list; `chatById` still has them,
+	 * because the popup and its link resolve through that.
+	 */
+	const listedChats = useMemo(
+		() => listableChats(sortedChats, inlineReplies),
+		[sortedChats, inlineReplies],
+	);
 	/** Forks of each chat, newest first, for the links under a conversation. */
 	const forksOf = useMemo(() => childrenByParent(sortedChats), [sortedChats]);
 
@@ -501,12 +553,212 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 	 * existing "open in two panes" rule forks it on the next send; the anchor
 	 * only decides how that fork is recorded.
 	 */
-	function startThread(paneId: string, messageId: string, quote: string) {
+	/**
+	 * Build the fork one send creates: the carried slice, fresh message ids, the
+	 * context to send, and the origin. `send` repoints its pane to it; a reply
+	 * keeps it inline instead. Shared so the two can never drift apart.
+	 */
+	function buildFork(
+		chat: Chat,
+		origin: ForkOrigin,
+		content: string,
+		exchange: { now: number; userMessage: Message; reply: Message },
+		/**
+		 * A reply opens with the passage it was started from, so the excerpt
+		 * leads the conversation as its own turn rather than sitting in a chip.
+		 * Forks leave this out -- their quote shows above the composer instead.
+		 */
+		quote?: string,
+	): { branched: Chat; history: ChatTurn[]; carried: number } {
+		// A thread starts at the anchored message; a branch carries everything,
+		// which `messagesUpTo` gives for the last message or for null.
+		const source = messagesUpTo(chat.messages, origin.parentMessageId);
+		const excerpt: Message[] = quote
+			? [
+					{
+						id: newId(),
+						role: "assistant",
+						content: quote,
+						// Just before the question, so the sort keeps it on top.
+						createdAt: exchange.now - 1,
+					},
+				]
+			: [];
+		const history: ChatTurn[] = [
+			...toTurns(source),
+			// Attributed to the user, not repeated as the model's own words.
+			...(quote ? [quoteTurn(quote)] : []),
+			{ role: "user", content },
+		];
+		const carried = copyMessages(source);
+		return {
+			branched: {
+				id: newId(),
+				title: titleFromMessage(content),
+				messages: [...carried, ...excerpt, exchange.userMessage, exchange.reply],
+				createdAt: exchange.now,
+				updatedAt: exchange.now,
+				origin,
+			},
+			history,
+			carried: carried.length,
+		};
+	}
+
+	function openReplyAt(paneId: string, messageId: string, quote?: string) {
+		const key = replyKey(paneId, messageId);
+		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
+		const parent = pane?.chatId ? (chatById.get(pane.chatId) ?? null) : null;
+		/*
+		 * Reconnect to a reply already hanging here rather than opening an empty
+		 * one. Popup state is in memory only, so after a reload the collapsed
+		 * link is all that is left -- its chat has to be found again, and how
+		 * many messages it carried recomputed from the parent.
+		 */
+		const existing = parent
+			? (forksOf.get(parent.id) ?? []).find(
+					(fork) => inlineReplySet.has(fork.id) && fork.origin?.parentMessageId === messageId,
+				)
+			: undefined;
+		const carried = parent
+			? messagesUpTo(parent.messages, messageId).filter((m) => !m.pending && !m.error).length
+			: 0;
+		setReplies((prev) => {
+			const current = prev[key];
+			if (current) {
+				// Re-triggering from a different highlight re-aims a popup that
+				// has not forked yet; once it has, its origin is already fixed.
+				return current.chatId === null && quote && current.quote !== quote
+					? { ...prev, [key]: { ...current, quote } }
+					: prev;
+			}
+			return {
+				...prev,
+				[key]: existing
+					? {
+							chatId: existing.id,
+							messageId,
+							draft: "",
+							carried,
+							// The chip above the composer outlives the popup's
+							// own state, so take the passage back from the fork.
+							...(existing.origin?.quote ? { quote: existing.origin.quote } : {}),
+						}
+					: {
+							chatId: null,
+							messageId,
+							draft: "",
+							carried: 0,
+							...(quote ? { quote } : {}),
+						},
+			};
+		});
+		setOpenReply(key);
+	}
+
+	function setReplyDraft(key: string, draft: string) {
+		setReplies((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], draft } } : prev));
+	}
+
+	/** Click-away: a popup that never sent anything leaves nothing behind. */
+	function closeReply() {
+		setOpenReply((key) => {
+			if (key) {
+				setReplies((prev) => (prev[key] && prev[key].chatId === null ? omit(prev, key) : prev));
+			}
+			return null;
+		});
+	}
+
+	/**
+	 * Send inside a popup. The first send forks the parent and keeps the result
+	 * inline; later sends are ordinary appends to a chat that now exists.
+	 */
+	function sendReply(paneId: string, key: string) {
+		const state = replies[key];
+		const content = state?.draft.trim();
+		if (!state || !content || !active) {
+			return;
+		}
+		const exchange = newExchange(content);
+		setReplyDraft(key, "");
+
+		if (state.chatId) {
+			const chat = chatById.get(state.chatId);
+			if (!chat || pendingRef.current.has(chat.id)) {
+				return;
+			}
+			const config = configFor(chat.id);
+			const history: ChatTurn[] = [
+				...toReplyTurns(chat.messages, chat.origin?.quote),
+				{ role: "user", content },
+			];
+			updateChat(chat.id, (current) => ({
+				...current,
+				updatedAt: exchange.now,
+				messages: [...current.messages, exchange.userMessage, exchange.reply],
+			}));
+			void request(chat.id, exchange.reply.id, history, config);
+			return;
+		}
+
+		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
+		const parent = pane?.chatId ? (chatById.get(pane.chatId) ?? null) : null;
+		if (!parent) {
+			return;
+		}
+		const origin: ForkOrigin = {
+			parentChatId: parent.id,
+			kind: "thread",
+			parentMessageId: state.messageId,
+			...(state.quote === undefined ? {} : { quote: state.quote }),
+		};
+		const { branched, history, carried } = buildFork(
+			parent,
+			origin,
+			content,
+			exchange,
+			state.quote,
+		);
+		const config = configFor(parent.id);
+		lockConfig(branched.id, config);
+		setReplies((prev) =>
+			prev[key] ? { ...prev, [key]: { ...prev[key], chatId: branched.id, carried } } : prev,
+		);
+		updateStore((prev) => {
+			const inlineReplies = markInline(prev.inlineReplies, branched.id);
+			saveLineage(prev.ns, { ...loadLineage(prev.ns), [branched.id]: origin });
+			saveInlineReplies(prev.ns, inlineReplies);
+			// Deliberately no revealInTree: an inline reply stays out of the sidebar.
+			return { ...prev, chats: [branched, ...prev.chats], inlineReplies };
+		});
+		void request(branched.id, exchange.reply.id, history, config);
+	}
+
+	/** "Fork to new chat": the same chat, now shown as a pane like any fork. */
+	function promoteReply(paneId: string, key: string) {
+		const chatId = replies[key]?.chatId;
+		if (!chatId) {
+			return;
+		}
+		setOpenReply(null);
+		setReplies((prev) => omit(prev, key));
+		updateStore((prev) => {
+			const inlineReplies = clearInline(prev.inlineReplies, chatId);
+			saveInlineReplies(prev.ns, inlineReplies);
+			revealInTree(prev.chats, chatId);
+			return { ...prev, inlineReplies };
+		});
+		placeChat(paneId, chatId);
+	}
+
+	/** `quote` comes from the selection pill; the per-message button omits it. */
+	function startThread(paneId: string, messageId: string, quote?: string) {
 		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
 		if (!pane?.chatId) {
 			return;
 		}
-		placeChat(paneId, pane.chatId, { messageId, quote });
+		placeChat(paneId, pane.chatId, quote === undefined ? { messageId } : { messageId, quote });
 	}
 
 	function clearThread(paneId: string) {
@@ -723,12 +975,6 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 			// A fork continues the same conversation, so it inherits the
 			// source chat's locked config rather than the preferences.
 			const config = configFor(chat.id);
-			// A fork from a highlighted passage continues from THAT message; the
-			// turns after it belong to the path being left behind, so they are
-			// carried into neither the new chat nor the context sent upstream.
-			const source = messagesUpTo(chat.messages, anchor?.messageId ?? null);
-			const history: ChatTurn[] = [...toTurns(source), { role: "user", content }];
-			const carried = copyMessages(source);
 			// A thread diverges at the highlighted message; a plain branch at the
 			// last turn carried over. Both refer to the parent's message ids.
 			const origin: ForkOrigin = anchor
@@ -736,21 +982,14 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 						parentChatId: chat.id,
 						kind: "thread",
 						parentMessageId: anchor.messageId,
-						quote: anchor.quote,
+						...(anchor.quote === undefined ? {} : { quote: anchor.quote }),
 					}
 				: {
 						parentChatId: chat.id,
 						kind: "branch",
 						parentMessageId: lastPersistedId(chat.messages),
 					};
-			const branched: Chat = {
-				id: newId(),
-				title: titleFromMessage(content),
-				messages: [...carried, userMessage, reply],
-				createdAt: now,
-				updatedAt: now,
-				origin,
-			};
+			const { branched, history } = buildFork(chat, origin, content, { now, userMessage, reply });
 			clearThread(paneId);
 			lockConfig(branched.id, config);
 			updateStore((prev) => {
@@ -766,7 +1005,12 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 		} else if (chat) {
 			const config = configFor(chat.id);
 			lockConfig(chat.id, config);
-			const history: ChatTurn[] = [...toTurns(chat.messages), { role: "user", content }];
+			// `toReplyTurns`, not `toTurns`: a promoted reply still carries the
+			// passage it began with, and it stays the user's quote here too.
+			const history: ChatTurn[] = [
+				...toReplyTurns(chat.messages, chat.origin?.quote),
+				{ role: "user", content },
+			];
 			updateChat(chat.id, (current) => ({
 				...current,
 				updatedAt: now,
@@ -793,19 +1037,23 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 
 	/** Re-request an assistant reply using the conversation up to that point. */
 	function redo(paneId: string, messageId: string) {
-		if (!active) {
-			return;
-		}
 		const pane = activeLayout ? findPane(activeLayout, paneId) : null;
-		const chat = pane?.chatId ? (chatById.get(pane.chatId) ?? null) : null;
-		if (!chat || pendingRef.current.has(chat.id)) {
+		redoIn(pane?.chatId ? (chatById.get(pane.chatId) ?? null) : null, messageId);
+	}
+
+	/**
+	 * Regenerate one reply. Takes the chat rather than the pane, because a
+	 * popup's Retry belongs to the reply chat, not to the pane it hangs in.
+	 */
+	function redoIn(chat: Chat | null, messageId: string) {
+		if (!active || !chat || pendingRef.current.has(chat.id)) {
 			return;
 		}
 		const index = chat.messages.findIndex((m) => m.id === messageId);
 		if (index < 0) {
 			return;
 		}
-		const history = toTurns(chat.messages.slice(0, index));
+		const history = toReplyTurns(chat.messages.slice(0, index), chat.origin?.quote);
 		if (history.length === 0) {
 			return;
 		}
@@ -949,12 +1197,17 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 			if (bookmarks.length !== prev.bookmarks.length) {
 				saveBookmarks(prev.ns, bookmarks);
 			}
+			const nextInline = dropInlineFor(prev.inlineReplies, prev.chats, id);
+			if (nextInline.length !== prev.inlineReplies.length) {
+				saveInlineReplies(prev.ns, nextInline);
+			}
 			return {
 				...prev,
 				chats: prev.chats.filter((chat) => chat.id !== id),
 				layout: clearChat(prev.layout, id),
 				bookmarkLayout: prev.bookmarkLayout ? clearChat(prev.bookmarkLayout, id) : null,
 				bookmarks,
+				inlineReplies: nextInline,
 			};
 		});
 	}
@@ -1013,6 +1266,46 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 				onRedo={(messageId) => redo(pane.id, messageId)}
 				onOpenFork={(chatId) => openFork(pane.id, chatId)}
 				onThread={(messageId, quote) => startThread(pane.id, messageId, quote)}
+				onForkMessage={(messageId) => startThread(pane.id, messageId)}
+				onReply={(messageId, quote) => openReplyAt(pane.id, messageId, quote)}
+				inlineReplies={inlineReplySet}
+				expandedReplyAt={
+					openReply && openReply.startsWith(`${pane.id}:`)
+						? (replies[openReply]?.messageId ?? null)
+						: null
+				}
+				replyFor={(messageId) => {
+					const key = replyKey(pane.id, messageId);
+					if (openReply !== key) {
+						return null;
+					}
+					const state = replies[key];
+					if (!state) {
+						return null;
+					}
+					const replyChat = state.chatId ? (chatById.get(state.chatId) ?? null) : null;
+					const streaming = replyChat ? pendingIds.has(replyChat.id) : false;
+					return (
+						<ReplyPopup
+							chat={replyChat}
+							carried={state.carried}
+							quote={state.quote}
+							draft={state.draft}
+							streaming={streaming}
+							busy={streaming}
+							onDraftChange={(value) => setReplyDraft(key, value)}
+							onSend={() => sendReply(pane.id, key)}
+							onRedo={(messageId) => redoIn(replyChat, messageId)}
+							onStop={() => {
+								if (replyChat) {
+									pendingRef.current.get(replyChat.id)?.abort(STREAM_ABORT.stop);
+								}
+							}}
+							onPromote={() => promoteReply(pane.id, key)}
+							onClose={closeReply}
+						/>
+					);
+				}}
 				onBookmark={(messageId, quote) => addBookmarkFrom(pane.id, messageId, quote)}
 				onClearThread={() => clearThread(pane.id)}
 				onMoveStart={startMove}
@@ -1027,7 +1320,7 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 	return (
 		<div className="app">
 			<Sidebar
-				chats={sortedChats}
+				chats={listedChats}
 				activeChatId={focusedPane?.chatId ?? null}
 				open={sidebarOpen}
 				onToggle={() => persistSidebarOpen(!sidebarOpen)}

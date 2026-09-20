@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -9,6 +9,8 @@ import { IconButton } from "./IconButton";
 import {
 	CheckIcon,
 	CopyIcon,
+	ForkIcon,
+	ReplyIcon,
 	RegenerateIcon,
 } from "./Icons";
 import {
@@ -27,6 +29,14 @@ type Props = {
 	isLast: boolean;
 	/** Re-request this reply (regenerate, or retry after an error). */
 	onRedo: () => void;
+	/** Fork the conversation from this message, carrying everything up to it. */
+	onFork: () => void;
+	/** Open a reply popup inside this message. */
+	onReply: () => void;
+	/** Inside a reply popup: no action row, so replies cannot nest. */
+	compact?: boolean;
+	/** The reply popup for this message, rendered under it when open. */
+	reply?: ReactNode;
 };
 
 /**
@@ -37,7 +47,7 @@ type Props = {
  * the same way.
  */
 export const MessageView = memo(
-	function MessageView({ message, isLast, onRedo }: Props) {
+	function MessageView({ message, isLast, onRedo, onFork, onReply, compact, reply }: Props) {
 	if (message.role === "user") {
 		return (
 			<div className="turn turn--user" data-message-id={message.id}>
@@ -80,11 +90,25 @@ export const MessageView = memo(
 			<div className="markdown">
 				<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
 			</div>
-			<AssistantActions content={content} isLast={isLast} onRedo={onRedo} />
+			{reply}
+			{compact ? null : (
+				<AssistantActions
+					content={content}
+					isLast={isLast}
+					onRedo={onRedo}
+					onFork={onFork}
+					onReply={onReply}
+				/>
+			)}
 		</div>
 	);
 	},
-	(prev, next) => prev.message === next.message && prev.isLast === next.isLast,
+	(prev, next) =>
+		prev.message === next.message &&
+		prev.isLast === next.isLast &&
+		// An open popup changes neither of the above, so it must be compared too.
+		prev.reply === next.reply &&
+		prev.compact === next.compact,
 );
 
 /** Roomier line-height so wrapped step labels read as prose, not a cramped chip. */
@@ -233,9 +257,15 @@ function CitationLink({ citation }: { citation: Citation }) {
 	);
 }
 
-type ActionsProps = { content: string; isLast: boolean; onRedo: () => void };
+type ActionsProps = {
+	content: string;
+	isLast: boolean;
+	onRedo: () => void;
+	onFork: () => void;
+	onReply: () => void;
+};
 
-function AssistantActions({ content, isLast, onRedo }: ActionsProps) {
+function AssistantActions({ content, isLast, onRedo, onFork, onReply }: ActionsProps) {
 	const [copied, setCopied] = useState(false);
 
 	useEffect(() => {
@@ -257,6 +287,17 @@ function AssistantActions({ content, isLast, onRedo }: ActionsProps) {
 
 	return (
 		<div className={`actions${isLast ? " actions--visible" : ""}`}>
+			<IconButton label="Reply" className="actions__button" onClick={onReply}>
+				<ReplyIcon />
+			</IconButton>
+			<IconButton
+				label="Fork from here"
+				title="Fork from here"
+				className="actions__button"
+				onClick={onFork}
+			>
+				<ForkIcon />
+			</IconButton>
 			<IconButton label={copied ? "Copied" : "Copy"} className="actions__button" onClick={copy}>
 				{copied ? <CheckIcon /> : <CopyIcon />}
 			</IconButton>

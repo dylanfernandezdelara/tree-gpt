@@ -20,6 +20,7 @@ import {
 } from "../lib/layout";
 import { registerLift, settleMove } from "../lib/paneLift";
 import { visualScale } from "../lib/zoom";
+import type { ReactNode } from "react";
 import type { Chat } from "../types";
 import { ChatThread } from "./ChatThread";
 import { Composer } from "./Composer";
@@ -63,7 +64,7 @@ type Props = {
 	/** Chats forked from this pane's chat, listed under the last message. */
 	forks: Chat[];
 	/** The passage this pane will fork from once something is sent. */
-	thread: { messageId: string; quote: string } | null;
+	thread: { messageId: string; quote?: string } | null;
 	/** Scroll to a bookmarked passage and tint it; replays when `nonce` changes. */
 	highlight: { messageId: string; quote: string; nonce: number } | null;
 	/**
@@ -81,6 +82,16 @@ type Props = {
 	onRedo: (messageId: string) => void;
 	onOpenFork: (chatId: string) => void;
 	onThread: (messageId: string, quote: string) => void;
+	/** Fork from one message's action row, with no highlighted passage. */
+	onForkMessage: (messageId: string) => void;
+	/** Open a reply popup on a message; `quote` only from the selection pill. */
+	onReply: (messageId: string, quote?: string) => void;
+	/** The popup to render inside a message, when one is open in this pane. */
+	replyFor: (messageId: string) => ReactNode;
+	/** Forks still shown inline: their links re-expand instead of opening a pane. */
+	inlineReplies: ReadonlySet<string>;
+	/** The message whose reply popup is open, so its link can step aside. */
+	expandedReplyAt: string | null;
 	onBookmark: (messageId: string, quote: string) => void;
 	onClearThread: () => void;
 	/** Pointer-move session: lift, hover, release-to-commit, cancel. */
@@ -122,6 +133,11 @@ export function ChatPane({
 	onRedo,
 	onOpenFork,
 	onThread,
+	onForkMessage,
+	onReply,
+	replyFor,
+	inlineReplies,
+	expandedReplyAt,
 	onBookmark,
 	onClearThread,
 	onMoveStart,
@@ -186,7 +202,9 @@ export function ChatPane({
 
 	function handlePaneClick(event: ReactMouseEvent<HTMLElement>) {
 		if (
-			(event.target as HTMLElement).closest("button, a, input, textarea, select, .pane__title")
+			(event.target as HTMLElement).closest(
+				"button, a, input, textarea, select, .pane__title, .reply",
+			)
 		) {
 			return;
 		}
@@ -510,7 +528,7 @@ export function ChatPane({
 	// they are clicked, which is what focuses them.
 	const composer = !focused ? null : (
 		<div className="composer-rise">
-			{thread ? (
+			{thread?.quote ? (
 				<div className="thread-quote">
 					<p className="thread-quote__text">{thread.quote}</p>
 					<IconButton
@@ -593,6 +611,11 @@ export function ChatPane({
 					forks={shownForks}
 					onOpenFork={onOpenFork}
 					onThread={onThread}
+					onForkMessage={onForkMessage}
+					onReply={onReply}
+					replyFor={replyFor}
+					inlineReplies={inlineReplies}
+					expandedReplyAt={expandedReplyAt}
 					onBookmark={onBookmark}
 					highlight={highlight}
 					focused={focused}

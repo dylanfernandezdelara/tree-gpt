@@ -71,6 +71,10 @@ function lineageKey(namespace: string): string {
 	return `treegpt.lineage.${namespace}.v1`;
 }
 
+function repliesKey(namespace: string): string {
+	return `treegpt.replies.${namespace}.v1`;
+}
+
 function bookmarksKey(namespace: string): string {
 	return `treegpt.bookmarks.${namespace}.v1`;
 }
@@ -242,6 +246,21 @@ export function loadLineage(namespace: string): Record<string, ForkOrigin> {
 
 export function saveLineage(namespace: string, lineage: Record<string, ForkOrigin>): void {
 	writeJson(lineageKey(namespace), lineage);
+}
+
+/**
+ * Chat ids of forks still shown inline, as reply popups rather than panes.
+ * Purely a presentation fact -- the chats themselves are ordinary forks -- so
+ * it lives here beside the lineage mirror rather than in `ForkOrigin.kind`,
+ * which is the persisted contract with the Worker.
+ */
+export function loadInlineReplies(namespace: string): string[] {
+	const parsed = readJson(repliesKey(namespace));
+	return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+}
+
+export function saveInlineReplies(namespace: string, ids: readonly string[]): void {
+	writeJson(repliesKey(namespace), [...ids]);
 }
 
 export function parseOrigin(value: unknown): ForkOrigin | undefined {

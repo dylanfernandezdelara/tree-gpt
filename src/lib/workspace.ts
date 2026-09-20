@@ -17,6 +17,8 @@ export type Store = {
 	layout: LayoutNode;
 	focusedPaneId: string;
 	bookmarks: Bookmark[];
+	/** Forks still shown inline as reply popups; hidden from the sidebar. */
+	inlineReplies: string[];
 	/** Bookmarks screen: at most two windows, stacked. Null until one opens. */
 	bookmarkLayout: LayoutNode | null;
 	bookmarkFocusedPaneId: string | null;

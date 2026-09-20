@@ -18,7 +18,7 @@ import {
 import { useAutoHideScrollbar } from "../lib/use-auto-hide-scrollbar";
 import { visualScale } from "../lib/zoom";
 import type { Chat } from "../types";
-import { ArrowDownIcon, BookmarkIcon, ForkIcon } from "./Icons";
+import { ArrowDownIcon, BookmarkIcon, ForkIcon, ReplyIcon } from "./Icons";
 import { MessageView } from "./Message";
 
 /** How far (px) from the bottom still counts as "at the bottom". */
@@ -41,6 +41,16 @@ type Props = {
 	onOpenFork: (chatId: string) => void;
 	/** Fork this conversation from a highlighted passage. */
 	onThread: (messageId: string, quote: string) => void;
+	/** Fork from one message's action row, with no highlighted passage. */
+	onForkMessage: (messageId: string) => void;
+	/** Open a reply popup on a message; `quote` only from the selection pill. */
+	onReply: (messageId: string, quote?: string) => void;
+	/** The popup to render inside a message, when one is open in this pane. */
+	replyFor: (messageId: string) => ReactNode;
+	/** Forks still shown inline: their links re-expand instead of opening a pane. */
+	inlineReplies: ReadonlySet<string>;
+	/** The message whose reply popup is open, so its link can step aside. */
+	expandedReplyAt: string | null;
 	/** Save a highlighted passage to the bookmarks screen. */
 	onBookmark: (messageId: string, quote: string) => void;
 	/** Scroll to a message and tint a passage; replays when `nonce` changes. */
@@ -68,6 +78,11 @@ export function ChatThread({
 	forks,
 	onOpenFork,
 	onThread,
+	onForkMessage,
+	onReply,
+	replyFor,
+	inlineReplies,
+	expandedReplyAt,
 	onBookmark,
 	highlight,
 	focused,
@@ -335,11 +350,26 @@ export function ChatThread({
 								message={message}
 								isLast={index === count - 1}
 								onRedo={() => onRedo(message.id)}
+								onFork={() => onForkMessage(message.id)}
+								onReply={() => onReply(message.id)}
+								reply={replyFor(message.id)}
 							/>
-							<ForkLinks forks={byMessage.get(message.id)} onOpen={onOpenFork} />
+							<ForkLinks
+								forks={byMessage.get(message.id)}
+								inlineReplies={inlineReplies}
+								expandedReplyAt={expandedReplyAt}
+								onOpen={onOpenFork}
+								onExpand={onReply}
+							/>
 						</Fragment>
 					))}
-					<ForkLinks forks={trailing} onOpen={onOpenFork} />
+					<ForkLinks
+						forks={trailing}
+						inlineReplies={inlineReplies}
+						expandedReplyAt={expandedReplyAt}
+						onOpen={onOpenFork}
+						onExpand={onReply}
+					/>
 				</div>
 			</div>
 			<div className="thread-top-fade" aria-hidden="true" />
@@ -361,6 +391,16 @@ export function ChatThread({
 					style={{ left: anchor.left, top: anchor.top }}
 					onMouseDown={(event) => event.preventDefault()}
 				>
+					<button
+						type="button"
+						className="selection-action"
+						onClick={() => act((messageId, quote) => onReply(messageId, quote), false)}
+					>
+						<ReplyIcon />
+						Reply
+					</button>
+					<span className="selection-bar__divider" aria-hidden="true" />
+					{/* Alone in keeping the selection: only a fork remounts this pane. */}
 					<button type="button" className="selection-action" onClick={() => act(onThread, true)}>
 						<ForkIcon />
 						Fork
@@ -379,25 +419,53 @@ export function ChatThread({
 	);
 }
 
-/** Links to the conversations forked at one point in this chat. */
-function ForkLinks({ forks, onOpen }: { forks?: Chat[]; onOpen: (chatId: string) => void }) {
+/**
+ * Links to the conversations forked at one point in this chat. A fork still
+ * shown inline gets the reply icon and re-expands its popup; every other one
+ * gets the fork icon and opens a pane. Both are the same blue link.
+ */
+function ForkLinks({
+	forks,
+	inlineReplies,
+	expandedReplyAt,
+	onOpen,
+	onExpand,
+}: {
+	forks?: Chat[];
+	inlineReplies: ReadonlySet<string>;
+	expandedReplyAt: string | null;
+	onOpen: (chatId: string) => void;
+	onExpand: (messageId: string) => void;
+}) {
 	if (!forks || forks.length === 0) {
+		return null;
+	}
+	const shown = forks.filter(
+		// An expanded reply is already on screen; its link would just repeat it.
+		(fork) =>
+			!(inlineReplies.has(fork.id) && fork.origin?.parentMessageId === expandedReplyAt),
+	);
+	if (shown.length === 0) {
 		return null;
 	}
 	return (
 		<div className="forks">
-			{forks.map((fork) => (
-				<button
-					key={fork.id}
-					type="button"
-					className="fork-link"
-					onClick={() => onOpen(fork.id)}
-					title={`Open ${fork.title}`}
-				>
-					<ForkIcon />
-					<span className="fork-link__title">{fork.title}</span>
-				</button>
-			))}
+			{shown.map((fork) => {
+				const inline = inlineReplies.has(fork.id);
+				const at = fork.origin?.parentMessageId;
+				return (
+					<button
+						key={fork.id}
+						type="button"
+						className="fork-link"
+						onClick={() => (inline && at ? onExpand(at) : onOpen(fork.id))}
+						title={inline ? `Expand ${fork.title}` : `Open ${fork.title}`}
+					>
+						{inline ? <ReplyIcon /> : <ForkIcon />}
+						<span className="fork-link__title">{fork.title}</span>
+					</button>
+				);
+			})}
 		</div>
 	);
 }

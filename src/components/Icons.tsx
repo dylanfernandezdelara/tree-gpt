@@ -180,6 +180,16 @@ export function ForkIcon(props: IconProps) {
 }
 
 /** The Fork mark. Keep `public/favicon.svg` and `public/icon.svg` on the same paths. */
+/** A curved return arrow: this conversation answers back into that message. */
+export function ReplyIcon(props: IconProps) {
+	return (
+		<Svg {...props}>
+			<path {...stroke} d="M8.5 5.5 4.5 9l4 3.5" />
+			<path {...stroke} d="M4.5 9h6.75A4.25 4.25 0 0 1 15.5 13.25v1.25" />
+		</Svg>
+	);
+}
+
 export function TreeIcon(props: IconProps) {
 	return (
 		<Svg {...props}>

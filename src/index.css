@@ -1320,6 +1320,112 @@ textarea {
 	text-align: center;
 }
 
+/* ---------- Reply popup ---------- */
+
+/*
+ * A short conversation inside the message it hangs from. Indented and boxed so
+ * it reads as belonging to that message rather than as a turn of its own.
+ */
+.reply {
+	max-width: 560px;
+	margin: 10px 0 2px 32px;
+	padding: 10px 12px 12px;
+	border: 1px solid var(--border-medium);
+	border-left: 3px solid var(--brand);
+	border-radius: 4px 14px 14px 4px;
+	background: var(--surface-sidebar);
+}
+
+.reply__thread {
+	display: flex;
+	flex-direction: column;
+	max-height: 320px;
+	margin-bottom: 8px;
+	overflow-y: auto;
+}
+
+/* Tighter than a full turn: this is a texting window, not a conversation. */
+.reply__thread .turn--assistant {
+	margin-top: 12px;
+}
+
+.reply__thread .turn--assistant:first-child {
+	margin-top: 0;
+}
+
+.reply__thread .bubble {
+	max-width: 85%;
+	font-size: 14px;
+}
+
+.reply__thread .markdown {
+	font-size: 14px;
+}
+
+/*
+ * A preview of the passage a reply is about, above its text box the way a
+ * pending fork previews one above its composer. It lasts until the first send,
+ * which turns the passage into the opening message of the reply.
+ */
+.reply__quote {
+	display: flex;
+	align-items: flex-start;
+	margin-bottom: 6px;
+	padding: 6px 8px 6px 10px;
+	border-left: 3px solid var(--brand);
+	border-radius: 0 8px 8px 0;
+	background: var(--surface-main);
+}
+
+.reply__quote-text {
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	margin: 0;
+	overflow: hidden;
+	font-size: 13px;
+	line-height: 18px;
+	color: var(--text-secondary);
+}
+
+.reply__composer {
+	display: flex;
+	align-items: flex-end;
+	gap: 6px;
+}
+
+.reply__composer .composer-beam {
+	flex: 1;
+	min-width: 0;
+}
+
+.reply__composer .composer {
+	min-height: 40px;
+	padding: 5px 5px 5px 14px;
+	border-radius: 20px;
+}
+
+.reply__composer .composer__input {
+	min-height: 28px;
+	max-height: 120px;
+	font-size: 14px;
+	line-height: 22px;
+}
+
+.reply__promote {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	margin-bottom: 4px;
+	color: var(--brand);
+}
+
+.reply__promote:disabled {
+	color: var(--text-tertiary);
+	cursor: default;
+}
+
 /* ---------- Small screens ---------- */
 
 @media (max-width: 768px) {

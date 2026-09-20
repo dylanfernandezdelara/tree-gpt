@@ -6,7 +6,7 @@ import { MessageView } from "./Message";
 
 function render(message: Message) {
 	return renderToStaticMarkup(
-		createElement(MessageView, { message, isLast: true, onRedo: () => {} }),
+		createElement(MessageView, { message, isLast: true, onRedo: () => {}, onFork: () => {}, onReply: () => {} }),
 	);
 }
 

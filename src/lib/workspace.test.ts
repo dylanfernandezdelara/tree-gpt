@@ -13,6 +13,7 @@ function store(view: Store["view"]): Store {
 		layout: chats,
 		focusedPaneId: chats.id,
 		bookmarks: [],
+	inlineReplies: [],
 		bookmarkLayout: bookmarks,
 		bookmarkFocusedPaneId: bookmarks.id,
 	};

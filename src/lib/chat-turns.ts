@@ -46,3 +46,43 @@ export function toTurns(messages: Message[]): ChatTurn[] {
 			content: m.content,
 		}));
 }
+
+/**
+ * The passage a reply was started from, as a turn the model can attribute.
+ *
+ * The excerpt is DISPLAYED as the assistant text it was lifted from, but sent
+ * that way it is just the model repeating a fragment of its own last answer --
+ * nothing marks it as the thing being asked about, and "what does this word
+ * mean?" comes back as "which word?". The user is the one pointing at it, so
+ * on the wire it is a user turn, quoted, immediately before the question.
+ */
+export function quoteTurn(quote: string): ChatTurn {
+	return {
+		role: "user",
+		content: `Quoting from your last message:\n\n> ${quote.replace(/\n/g, "\n> ")}`,
+	};
+}
+
+/**
+ * Turns for a chat that opened with a quoted excerpt.
+ *
+ * The excerpt is the one place a conversation holds two assistant turns in a
+ * row: it was inserted straight after the answer it was lifted from, and every
+ * other reply follows a question. That signature finds it without tracking an
+ * index, so the attribution survives later sends, a reload, a regenerate, and
+ * promotion to a full pane. A chat with no such pair is left alone.
+ */
+export function toReplyTurns(messages: Message[], quote?: string): ChatTurn[] {
+	const turns = toTurns(messages);
+	if (!quote) {
+		return turns;
+	}
+	const at = turns.findIndex(
+		(turn, index) =>
+			index > 0 &&
+			turn.role === "assistant" &&
+			turns[index - 1]?.role === "assistant" &&
+			turn.content === quote,
+	);
+	return at === -1 ? turns : turns.map((turn, index) => (index === at ? quoteTurn(quote) : turn));
+}
