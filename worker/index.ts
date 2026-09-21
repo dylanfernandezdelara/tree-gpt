@@ -15,33 +15,24 @@ const MAX_API_BODY_BYTES = 8 * 1024 * 1024;
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Present when `assets.binding` is set; unit tests that only cover /api omit it. */
-type EnvWithAssets = Env & {
-	ASSETS?: { fetch(request: Request): Promise<Response> };
-};
-
 /**
- * Hashed files under /assets/ are either a real JS/CSS body or a miss.
- * SPA fallback answers misses with 200 text/html, and that HTML is then
- * cached at the .js URL — the signed-in ChatApp chunk fails to parse and
- * the app stays on the blank session shell.
+ * Never serve HTML at /assets/*. SPA fallback answers misses with
+ * 200 text/html, and that HTML is then cached at the .js URL — the
+ * signed-in ChatApp chunk fails to parse and the app stays on the
+ * blank session shell.
  */
 export function serveHashedAsset(response: Response): Response {
-	const type = response.headers.get("Content-Type") ?? "";
-	const html = type.toLowerCase().includes("text/html");
-	// 304 is not `ok` (only 200–299 are). Hashed files use must-revalidate,
-	// so a reload sends If-None-Match and ASSETS answers 304 — that is a
-	// hit, not a miss. Treating it as a miss 404s the ChatApp chunk.
-	if ((response.ok && !html) || response.status === 304) {
-		return response;
+	const type = (response.headers.get("Content-Type") ?? "").toLowerCase();
+	if (type.includes("text/html") || response.status === 404) {
+		return new Response("Not found", {
+			status: 404,
+			headers: {
+				"Cache-Control": "no-store",
+				"X-Content-Type-Options": "nosniff",
+			},
+		});
 	}
-	return new Response("Not found", {
-		status: 404,
-		headers: {
-			"Cache-Control": "no-store",
-			"X-Content-Type-Options": "nosniff",
-		},
-	});
+	return response;
 }
 
 export default {
@@ -49,11 +40,7 @@ export default {
 		const url = new URL(request.url);
 
 		if (url.pathname.startsWith("/assets/")) {
-			const assets = (env as EnvWithAssets).ASSETS;
-			if (!assets) {
-				return serveHashedAsset(new Response(null, { status: 404 }));
-			}
-			return serveHashedAsset(await assets.fetch(request));
+			return serveHashedAsset(await env.ASSETS.fetch(request));
 		}
 
 		// Better Auth validates origins against its own trusted list and

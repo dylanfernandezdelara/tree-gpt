@@ -132,6 +132,20 @@ describe("worker fetch", () => {
 		expect(response.headers.get("ETag")).toBe('"abc"');
 	});
 
+	it("forwards an asset-binding 5xx from /assets/", async () => {
+		const { db } = makeDb({});
+		const unavailable = new Response("unavailable", { status: 503 });
+		const fetchAsset = vi.fn(async () => unavailable);
+		const response = await worker.fetch(
+			new Request("http://localhost:5173/assets/ChatApp-abc.js"),
+			envWith(db, { fetch: fetchAsset }),
+			ctx(),
+		);
+		expect(fetchAsset).toHaveBeenCalledTimes(1);
+		expect(response.status).toBe(503);
+		expect(await response.text()).toBe("unavailable");
+	});
+
 	it("404s a hashed asset miss instead of caching the SPA shell as JavaScript", async () => {
 		const { db } = makeDb({});
 		const html = new Response("<!doctype html><title>Fork</title>", {
@@ -139,9 +153,7 @@ describe("worker fetch", () => {
 			headers: { "Content-Type": "text/html; charset=UTF-8" },
 		});
 		const response = await worker.fetch(
-			new Request("http://localhost:5173/assets/ChatApp-missing.js", {
-				headers: { "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "script" },
-			}),
+			new Request("http://localhost:5173/assets/ChatApp-missing.js"),
 			envWith(db, { fetch: async () => html }),
 			ctx(),
 		);
@@ -203,6 +215,13 @@ describe("serveHashedAsset", () => {
 		expect(response.status).toBe(304);
 		expect(response.headers.get("ETag")).toBe('"abc"');
 		expect(await response.text()).toBe("");
+	});
+
+	it("forwards an asset-binding 5xx instead of rewriting it as a miss", async () => {
+		const upstream = new Response("unavailable", { status: 503 });
+		const response = serveHashedAsset(upstream);
+		expect(response.status).toBe(503);
+		expect(await response.text()).toBe("unavailable");
 	});
 });
 
