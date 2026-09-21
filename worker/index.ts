@@ -15,9 +15,33 @@ const MAX_API_BODY_BYTES = 8 * 1024 * 1024;
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/**
+ * Never serve HTML at /assets/*. SPA fallback answers misses with
+ * 200 text/html, and that HTML is then cached at the .js URL — the
+ * signed-in ChatApp chunk fails to parse and the app stays on the
+ * blank session shell.
+ */
+export function serveHashedAsset(response: Response): Response {
+	const type = (response.headers.get("Content-Type") ?? "").toLowerCase();
+	if (type.includes("text/html") || response.status === 404) {
+		return new Response("Not found", {
+			status: 404,
+			headers: {
+				"Cache-Control": "no-store",
+				"X-Content-Type-Options": "nosniff",
+			},
+		});
+	}
+	return response;
+}
+
 export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
+
+		if (url.pathname.startsWith("/assets/")) {
+			return serveHashedAsset(await env.ASSETS.fetch(request));
+		}
 
 		// Better Auth validates origins against its own trusted list and
 		// returns its own error shapes, so it stays outside the /api wrapper.
