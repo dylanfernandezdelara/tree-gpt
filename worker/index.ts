@@ -15,9 +15,42 @@ const MAX_API_BODY_BYTES = 8 * 1024 * 1024;
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+/** Present when `assets.binding` is set; unit tests that only cover /api omit it. */
+type EnvWithAssets = Env & {
+	ASSETS?: { fetch(request: Request): Promise<Response> };
+};
+
+/**
+ * Hashed files under /assets/ are either a real JS/CSS body or a miss.
+ * SPA fallback answers misses with 200 text/html, and that HTML is then
+ * cached at the .js URL — the signed-in ChatApp chunk fails to parse and
+ * the app stays on the blank session shell.
+ */
+export function serveHashedAsset(response: Response): Response {
+	const type = response.headers.get("Content-Type") ?? "";
+	if (response.ok && !type.toLowerCase().includes("text/html")) {
+		return response;
+	}
+	return new Response("Not found", {
+		status: 404,
+		headers: {
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+		},
+	});
+}
+
 export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
+
+		if (url.pathname.startsWith("/assets/")) {
+			const assets = (env as EnvWithAssets).ASSETS;
+			if (!assets) {
+				return serveHashedAsset(new Response(null, { status: 404 }));
+			}
+			return serveHashedAsset(await assets.fetch(request));
+		}
 
 		// Better Auth validates origins against its own trusted list and
 		// returns its own error shapes, so it stays outside the /api wrapper.

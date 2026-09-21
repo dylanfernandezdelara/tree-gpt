@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser, handleAuthRequest } from "./auth.js";
-import worker, { rejectUnsafeRequest, withApiHeaders } from "./index.js";
+import worker, { rejectUnsafeRequest, serveHashedAsset, withApiHeaders } from "./index.js";
 import { makeDb } from "./testing/d1.js";
 
 vi.mock("./auth.js", () => ({
@@ -9,7 +9,8 @@ vi.mock("./auth.js", () => ({
 	ensureDomainUser: vi.fn(async () => {}),
 }));
 
-const envWith = (db: D1Database) => ({ DB: db }) as unknown as Env;
+const envWith = (db: D1Database, assets?: { fetch(request: Request): Promise<Response> }) =>
+	({ DB: db, ...(assets ? { ASSETS: assets } : {}) }) as unknown as Env;
 
 function ctx() {
 	return {
@@ -95,6 +96,42 @@ describe("worker fetch", () => {
 		expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
 	});
 
+	it("passes a real hashed asset through unchanged", async () => {
+		const { db } = makeDb({});
+		const js = new Response("export default 1", {
+			headers: { "Content-Type": "text/javascript" },
+		});
+		const fetchAsset = vi.fn(async () => js);
+		const response = await worker.fetch(
+			new Request("http://localhost:5173/assets/ChatApp-abc.js"),
+			envWith(db, { fetch: fetchAsset }),
+			ctx(),
+		);
+		expect(fetchAsset).toHaveBeenCalledTimes(1);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Content-Type")).toContain("javascript");
+		expect(await response.text()).toBe("export default 1");
+	});
+
+	it("404s a hashed asset miss instead of caching the SPA shell as JavaScript", async () => {
+		const { db } = makeDb({});
+		const html = new Response("<!doctype html><title>Fork</title>", {
+			status: 200,
+			headers: { "Content-Type": "text/html; charset=UTF-8" },
+		});
+		const response = await worker.fetch(
+			new Request("http://localhost:5173/assets/ChatApp-missing.js", {
+				headers: { "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "script" },
+			}),
+			envWith(db, { fetch: async () => html }),
+			ctx(),
+		);
+		expect(response.status).toBe(404);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
+		expect(response.headers.get("Content-Type")).not.toContain("text/html");
+		expect(await response.text()).toBe("Not found");
+	});
+
 	it("keeps a handler's own Cache-Control when it sets one", async () => {
 		const sse = withApiHeaders(
 			new Response("data: x\n\n", {
@@ -104,6 +141,38 @@ describe("worker fetch", () => {
 		expect(sse.headers.get("Cache-Control")).toBe("no-cache");
 		expect(sse.headers.get("X-Content-Type-Options")).toBe("nosniff");
 		expect(await sse.text()).toBe("data: x\n\n");
+	});
+});
+
+describe("serveHashedAsset", () => {
+	it("keeps a successful JS or CSS body", async () => {
+		const js = serveHashedAsset(
+			new Response("ok", { headers: { "Content-Type": "text/javascript; charset=UTF-8" } }),
+		);
+		expect(js.status).toBe(200);
+		expect(await js.text()).toBe("ok");
+		const css = serveHashedAsset(
+			new Response("body{}", { headers: { "Content-Type": "text/css" } }),
+		);
+		expect(css.status).toBe(200);
+		expect(await css.text()).toBe("body{}");
+	});
+
+	it("turns the SPA HTML fallback into an uncacheable 404", async () => {
+		const response = serveHashedAsset(
+			new Response("<!doctype html>", {
+				headers: { "Content-Type": "text/html" },
+			}),
+		);
+		expect(response.status).toBe(404);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
+		expect(await response.text()).toBe("Not found");
+	});
+
+	it("does not cache a binding 404 as HTML either", async () => {
+		const response = serveHashedAsset(new Response(null, { status: 404 }));
+		expect(response.status).toBe(404);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
 	});
 });
 

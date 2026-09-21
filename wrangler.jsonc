@@ -18,7 +18,11 @@
 	],
 	"assets": {
 		"not_found_handling": "single-page-application",
-		"run_worker_first": ["/api/*"],
+		"binding": "ASSETS",
+		// /assets/* must hit the Worker so a missing hashed file is a 404,
+		// not the SPA shell. A 200 text/html at a .js URL caches as JavaScript
+		// and leaves signed-in users on a blank page (ChatApp never loads).
+		"run_worker_first": ["/api/*", "/assets/*"],
 	},
 	"observability": {
 		"enabled": true,
