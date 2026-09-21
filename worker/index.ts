@@ -28,7 +28,11 @@ type EnvWithAssets = Env & {
  */
 export function serveHashedAsset(response: Response): Response {
 	const type = response.headers.get("Content-Type") ?? "";
-	if (response.ok && !type.toLowerCase().includes("text/html")) {
+	const html = type.toLowerCase().includes("text/html");
+	// 304 is not `ok` (only 200–299 are). Hashed files use must-revalidate,
+	// so a reload sends If-None-Match and ASSETS answers 304 — that is a
+	// hit, not a miss. Treating it as a miss 404s the ChatApp chunk.
+	if ((response.ok && !html) || response.status === 304) {
 		return response;
 	}
 	return new Response("Not found", {

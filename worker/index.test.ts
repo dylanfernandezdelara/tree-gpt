@@ -113,6 +113,25 @@ describe("worker fetch", () => {
 		expect(await response.text()).toBe("export default 1");
 	});
 
+	it("forwards a hashed-asset 304 from the assets binding", async () => {
+		const { db } = makeDb({});
+		const notModified = new Response(null, {
+			status: 304,
+			headers: { ETag: '"abc"' },
+		});
+		const fetchAsset = vi.fn(async () => notModified);
+		const response = await worker.fetch(
+			new Request("http://localhost:5173/assets/ChatApp-abc.js", {
+				headers: { "If-None-Match": '"abc"' },
+			}),
+			envWith(db, { fetch: fetchAsset }),
+			ctx(),
+		);
+		expect(fetchAsset).toHaveBeenCalledTimes(1);
+		expect(response.status).toBe(304);
+		expect(response.headers.get("ETag")).toBe('"abc"');
+	});
+
 	it("404s a hashed asset miss instead of caching the SPA shell as JavaScript", async () => {
 		const { db } = makeDb({});
 		const html = new Response("<!doctype html><title>Fork</title>", {
@@ -173,6 +192,17 @@ describe("serveHashedAsset", () => {
 		const response = serveHashedAsset(new Response(null, { status: 404 }));
 		expect(response.status).toBe(404);
 		expect(response.headers.get("Cache-Control")).toBe("no-store");
+	});
+
+	it("forwards a 304 revalidation hit", async () => {
+		const notModified = new Response(null, {
+			status: 304,
+			headers: { ETag: '"abc"' },
+		});
+		const response = serveHashedAsset(notModified);
+		expect(response.status).toBe(304);
+		expect(response.headers.get("ETag")).toBe('"abc"');
+		expect(await response.text()).toBe("");
 	});
 });
 
