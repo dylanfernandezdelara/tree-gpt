@@ -1,7 +1,9 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { GlobeIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
 import type { Citation, Message, ToolCall } from "../types";
@@ -20,9 +22,11 @@ import {
 	ChainOfThoughtStep,
 } from "./ai-elements/chain-of-thought";
 
-/** GFM plus hard breaks: Muse writes `**Title**\\nBody` and CommonMark would
- *  otherwise collapse that single newline into a space ("tangent Fork"). */
-const remarkPlugins = [remarkGfm, remarkBreaks];
+/** GFM plus hard breaks: Muse writes `**Title**\nBody` and CommonMark would
+ *  otherwise collapse that single newline into a space ("tangent Fork").
+ *  remark-math typesets `$...$` / `$$...$$` via KaTeX; throwOnError: false
+ *  keeps malformed or still-streaming math from crashing the render. */
+const remarkPlugins = [remarkGfm, remarkBreaks, remarkMath];
 
 type Props = {
 	message: Message;
@@ -77,7 +81,7 @@ export const MessageView = memo(
 				<Thinking message={message} />
 				{content ? (
 					<div className="markdown markdown--live">
-						<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
+						<Markdown remarkPlugins={remarkPlugins} rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}>{content}</Markdown>
 					</div>
 				) : null}
 			</div>
@@ -88,7 +92,7 @@ export const MessageView = memo(
 		<div className="turn turn--assistant" data-message-id={message.id}>
 			<Thinking message={message} />
 			<div className="markdown">
-				<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
+				<Markdown remarkPlugins={remarkPlugins} rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}>{content}</Markdown>
 			</div>
 			{reply}
 			{compact ? null : (
