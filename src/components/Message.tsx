@@ -1,9 +1,13 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
-import Markdown from "react-markdown";
+import Markdown, { type Options } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 import { GlobeIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
+import { normalizeMath } from "../lib/math";
 import type { Citation, Message, ToolCall } from "../types";
 import { IconButton } from "./IconButton";
 import {
@@ -20,9 +24,13 @@ import {
 	ChainOfThoughtStep,
 } from "./ai-elements/chain-of-thought";
 
-/** GFM plus hard breaks: Muse writes `**Title**\\nBody` and CommonMark would
- *  otherwise collapse that single newline into a space ("tangent Fork"). */
-const remarkPlugins = [remarkGfm, remarkBreaks];
+/** GFM plus hard breaks: Muse writes `**Title**\nBody` and CommonMark would
+ *  otherwise collapse that single newline into a space ("tangent Fork").
+ *  remark-math + KaTeX typeset math that `normalizeMath` has put in `$`
+ *  delimiters; throwOnError: false keeps malformed or half-streamed TeX from
+ *  crashing the render. The KaTeX CSS rides this lazy chunk, not the login. */
+const remarkPlugins = [remarkGfm, remarkBreaks, remarkMath];
+const rehypePlugins: Options["rehypePlugins"] = [[rehypeKatex, { throwOnError: false }]];
 
 type Props = {
 	message: Message;
@@ -77,7 +85,9 @@ export const MessageView = memo(
 				<Thinking message={message} />
 				{content ? (
 					<div className="markdown markdown--live">
-						<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
+						<Markdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+							{normalizeMath(content)}
+						</Markdown>
 					</div>
 				) : null}
 			</div>
@@ -88,7 +98,9 @@ export const MessageView = memo(
 		<div className="turn turn--assistant" data-message-id={message.id}>
 			<Thinking message={message} />
 			<div className="markdown">
-				<Markdown remarkPlugins={remarkPlugins}>{content}</Markdown>
+				<Markdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+					{normalizeMath(content)}
+				</Markdown>
 			</div>
 			{reply}
 			{compact ? null : (
