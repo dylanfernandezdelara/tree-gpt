@@ -29,6 +29,8 @@ describe("systemPrompt", () => {
 				"Today's date is Tuesday, 8 September 2026 (UTC).",
 				"",
 				"When the user asks about current events, live results, or anything that may have changed after your training cutoff, use web search. When you rely on search, name the sources in the reply.",
+				"",
+				"Write math in LaTeX: $...$ for inline math and $$...$$ on their own lines for display equations, with no space just inside the dollar signs. This includes equations and formulas in running text. Do not use \\(...\\) or \\[...\\], do not write LaTeX commands outside those delimiters, and do not put math in code blocks. Write money the usual way, like $20; it is not math.",
 			].join("\n"),
 		);
 	});
