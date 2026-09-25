@@ -284,4 +284,17 @@ describe("MessageView chain of thought", () => {
 			'<div class="bubble">a *b* `c` $5</div>',
 		);
 	});
+
+	it("hides math that is still streaming instead of showing raw TeX", () => {
+		const html = render({
+			id: "p1",
+			role: "assistant",
+			createdAt: 12,
+			pending: true,
+			content: "The answer is\n\n$$x = \\frac{-b \\pm",
+		});
+		expect(html).toContain("The answer is");
+		expect(html).not.toContain("frac");
+		expect(html).not.toContain("katex-error");
+	});
 });

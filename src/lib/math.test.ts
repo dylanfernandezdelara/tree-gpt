@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMath, splitMath } from "./math";
+import { normalizeMath, settledMath, splitMath } from "./math";
 
 describe("normalizeMath", () => {
 	it("turns \\( \\) into inline $ math", () => {
@@ -85,5 +85,39 @@ describe("splitMath", () => {
 			display("\\begin{align}\na &= b\n\\end{align}"),
 			text("Thoughts?"),
 		]);
+	});
+});
+
+describe("settledMath", () => {
+	it("passes through text whose math is all closed", () => {
+		const done = "Roots of $ax^2$ are\n$$x = 1$$\nand \\(y\\). Costs $5.";
+		expect(settledMath(done)).toBe(done);
+	});
+
+	it("cuts before $$, \\[ and \\( that have not closed yet", () => {
+		expect(settledMath("So\n\n$$x = \\frac{-b}{")).toBe("So");
+		expect(settledMath("Then \\[ a + ")).toBe("Then");
+		expect(settledMath("Euler: \\(e^{i")).toBe("Euler:");
+		expect(settledMath("Next: $")).toBe("Next:");
+		expect(settledMath("Next: \\")).toBe("Next:");
+	});
+
+	it("holds a $ that reads as math only until its paragraph ends", () => {
+		expect(settledMath("the roots of $ax^2 + b")).toBe("the roots of");
+		expect(settledMath("we need $2k = \\frac{b")).toBe("we need");
+		expect(settledMath("A $5/month plan or $1,200.50 once")).toBe("A $5/month plan or $1,200.50 once");
+		expect(settledMath("It costs $5 and $10 per")).toBe("It costs $5 and $10 per");
+		expect(settledMath("echo $PATH is set\n\nNext paragraph")).toBe("echo $PATH is set\n\nNext paragraph");
+	});
+
+	it("holds a display environment from its line until \\end", () => {
+		expect(settledMath("See:\n\\begin{align}\na &= b \\\\\nc &=")).toBe("See:");
+		const closed = "See:\n\\begin{align}\na &= b\n\\end{align}\nok";
+		expect(settledMath(closed)).toBe(closed);
+	});
+
+	it("never holds inside code, even an unclosed fence", () => {
+		expect(settledMath("Run `echo $x` now")).toBe("Run `echo $x` now");
+		expect(settledMath("```sh\necho $$ \\(")).toBe("```sh\necho $$ \\(");
 	});
 });

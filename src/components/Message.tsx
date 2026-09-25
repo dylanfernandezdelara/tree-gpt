@@ -7,7 +7,7 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { GlobeIcon, SearchIcon } from "lucide-react";
 import { ThinkingOrb } from "thinking-orbs";
-import { normalizeMath } from "../lib/math";
+import { normalizeMath, settledMath } from "../lib/math";
 import type { Citation, Message, ToolCall } from "../types";
 import { IconButton } from "./IconButton";
 import { MathText } from "./MathText";
@@ -83,13 +83,15 @@ export const MessageView = memo(
 	const content = message.content;
 
 	if (message.pending) {
+		// Math still streaming stays hidden until it closes, instead of raw TeX.
+		const settled = settledMath(content);
 		return (
 			<div className="turn turn--assistant" aria-busy="true" aria-live="polite">
 				<Thinking message={message} />
-				{content ? (
+				{settled ? (
 					<div className="markdown markdown--live">
 						<Markdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-							{normalizeMath(content)}
+							{normalizeMath(settled)}
 						</Markdown>
 					</div>
 				) : null}
