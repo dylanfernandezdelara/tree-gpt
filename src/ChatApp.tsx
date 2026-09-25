@@ -16,6 +16,7 @@ import {
 	toTurns,
 } from "./lib/chat-turns";
 import { MOBILE_CHROME_QUERY } from "./lib/hide-on-scroll";
+import { copyWithTex } from "./lib/passage";
 import { STREAM_ABORT, streamFailureAction } from "./lib/stream-abort";
 import { signOut, type AuthUser } from "./lib/auth-client";
 import { listChats } from "./lib/chatsApi";
@@ -285,6 +286,11 @@ export default function ChatApp({ user }: { user: AuthUser }) {
 		setSidebarOpenState(open);
 		saveSidebarOpen(open);
 	}
+
+	useEffect(() => {
+		document.addEventListener("copy", copyWithTex);
+		return () => document.removeEventListener("copy", copyWithTex);
+	}, []);
 
 	useEffect(() => {
 		saveSelectedModel(model);

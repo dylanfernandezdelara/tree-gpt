@@ -12,7 +12,7 @@ export type Piece =
 	| { kind: "math"; el: Element; text: string }
 	| { kind: "break"; text: "\n" };
 
-const BLOCK = new Set(["P", "LI", "PRE", "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "TR", "BR"]);
+const BLOCK = new Set(["DIV", "P","LI", "PRE", "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6", "TR", "BR"]);
 
 /** The message read in order, one piece per text node, formula or line break. */
 export function piecesOf(root: Element): Piece[] {
@@ -157,4 +157,34 @@ export function findPassage(message: Element, quote: string): Range | null {
 	bound(found.start, false);
 	bound(found.end, true);
 	return range;
+}
+
+/**
+ * Cmd+C over typeset math copies glyphs and hidden MathML the same way a
+ * selection reads them. When the selection touches a formula, put the
+ * passage with TeX on the clipboard instead; anything else copies natively.
+ */
+export function copyWithTex(event: ClipboardEvent): void {
+	const selection = document.getSelection();
+	if (!event.clipboardData || !selection || selection.isCollapsed || selection.rangeCount === 0) {
+		return;
+	}
+	const range = selection.getRangeAt(0);
+	const common = range.commonAncestorContainer;
+	const root = common instanceof Element ? common : common.parentElement;
+	if (!root) {
+		return;
+	}
+	// A selection wholly inside one formula has that formula as its root.
+	const formula = root.closest(".katex");
+	const scope = formula?.parentElement ?? root;
+	if (!formula && !touchesMath(range, scope)) {
+		return;
+	}
+	const text = passageText(range, scope);
+	if (!text) {
+		return;
+	}
+	event.clipboardData.setData("text/plain", text);
+	event.preventDefault();
 }
