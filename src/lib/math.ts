@@ -170,7 +170,7 @@ export function splitMath(text: string): MathSegment[] {
 		const last = segments[segments.length - 1];
 		if (display && last?.kind === "text") {
 			// A display block is its own line; drop the break that led to it.
-			last.text = last.text.replace(/[ \t]*\n?[ \t]*$/, "");
+			last.text = last.text.replace(/[ \t]*\n[ \t]*$/, "");
 		}
 		segments.push({ kind: "math", tex: tex.trim(), display });
 	};

@@ -67,6 +67,7 @@ describe("splitMath", () => {
 			text("?"),
 		]);
 		expect(splitMath("Solve\n$$x = 1$$\nplease")).toEqual([text("Solve"), display("x = 1"), text("please")]);
+		expect(splitMath("are $$x$$ which")).toEqual([text("are "), display("x"), text(" which")]);
 	});
 
 	it("keeps money, shell variables and code as text", () => {

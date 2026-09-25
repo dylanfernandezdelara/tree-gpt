@@ -4,6 +4,7 @@ import { visualScale } from "../lib/zoom";
 import type { Bookmark, Chat } from "../types";
 import { IconButton } from "./IconButton";
 import { BookmarkFilledIcon } from "./Icons";
+import { MathText } from "./MathText";
 
 const MIN_WIDTH = 280;
 /** Never let the list crowd out the conversation. */
@@ -99,10 +100,12 @@ export function BookmarksView({
 										title={bookmark.quote}
 									>
 										<span className="bookmark-row__chat">
-											{chatsById.get(bookmark.chatId)?.title ?? "Deleted chat"}
+											<MathText text={chatsById.get(bookmark.chatId)?.title ?? "Deleted chat"} inline />
 										</span>
 										<span className="bookmark-row__date">{formatDate(bookmark.createdAt)}</span>
-										<span className="bookmark-row__snippet">{bookmark.quote}</span>
+										<span className="bookmark-row__snippet">
+											<MathText text={bookmark.quote} inline />
+										</span>
 									</button>
 									<IconButton
 										label="Remove bookmark"

@@ -30,6 +30,7 @@ import { IconButton } from "./IconButton";
 import { CloseIcon } from "./Icons";
 import { ModelSelector } from "./ModelSelector";
 import type { EffortId, ModelId } from "../../worker/tree-types";
+import { MathText } from "./MathText";
 
 /** Stable empty list, so a pending fork does not remount ChatThread's grouping. */
 const NO_FORKS: Chat[] = [];
@@ -530,7 +531,9 @@ export function ChatPane({
 		<div className="composer-rise">
 			{thread?.quote ? (
 				<div className="thread-quote">
-					<p className="thread-quote__text">{thread.quote}</p>
+					<p className="thread-quote__text">
+						<MathText text={thread.quote} inline />
+					</p>
 					<IconButton
 						label="Clear forked passage"
 						className="thread-quote__clear"
@@ -595,7 +598,7 @@ export function ChatPane({
 							title={chat ? `${title} — double-click to rename` : title}
 							onDoubleClick={startRename}
 						>
-							{title}
+							<MathText text={title} inline />
 						</span>
 					)}
 					<IconButton label="Close pane" className="pane__close" onClick={onClose}>

@@ -4,6 +4,7 @@ import { Composer } from "./Composer";
 import { IconButton } from "./IconButton";
 import { ForkIcon } from "./Icons";
 import { MessageView } from "./Message";
+import { MathText } from "./MathText";
 
 type Props = {
 	/** The fork behind this popup, once the first send has created it. */
@@ -94,7 +95,9 @@ export function ReplyPopup({
 				 * afterwards would show the passage twice in a box this small.
 				 */
 				<div className="reply__quote">
-					<p className="reply__quote-text">{quote}</p>
+					<p className="reply__quote-text">
+						<MathText text={quote} inline />
+					</p>
 				</div>
 			) : null}
 			<div className="reply__composer">

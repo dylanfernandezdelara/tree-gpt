@@ -18,19 +18,27 @@ export const MathText = memo(function MathText({ text, inline = false }: { text:
 			{segments.map((segment, i) =>
 				segment.kind === "text" ? (
 					<Fragment key={i}>{segment.text}</Fragment>
+				) : segment.display && inline ? (
+					// A display block run into the line: keep it apart from its neighbours.
+					<Fragment key={i}>
+						{" "}
+						<Formula tex={segment.tex} display={false} />{" "}
+					</Fragment>
 				) : (
-					<span
-						key={i}
-						// KaTeX output with `trust` off: no links, classes or raw HTML from the TeX.
-						dangerouslySetInnerHTML={{
-							__html: katex.renderToString(segment.tex, {
-								displayMode: segment.display && !inline,
-								throwOnError: false,
-							}),
-						}}
-					/>
+					<Formula key={i} tex={segment.tex} display={segment.display} />
 				),
 			)}
 		</>
 	);
 });
+
+function Formula({ tex, display }: { tex: string; display: boolean }) {
+	return (
+		<span
+			// KaTeX output with `trust` off: no links, classes or raw HTML from the TeX.
+			dangerouslySetInnerHTML={{
+				__html: katex.renderToString(tex, { displayMode: display, throwOnError: false }),
+			}}
+		/>
+	);
+}
