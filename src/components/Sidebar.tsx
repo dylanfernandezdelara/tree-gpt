@@ -24,6 +24,7 @@ import {
 	TrashIcon,
 } from "./Icons";
 import { UserMenu } from "./UserMenu";
+import { MathText } from "./MathText";
 
 type Props = {
 	chats: Chat[];
@@ -346,7 +347,7 @@ function ChatRow({
 					}}
 					onDragEnd={onDragEnd}
 				>
-					{chat.title}
+					<MathText text={chat.title} inline />
 				</button>
 			)}
 			<IconButton

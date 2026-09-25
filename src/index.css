@@ -842,6 +842,15 @@ textarea {
 	margin: 0.4em 0;
 }
 
+/* One-line previews: math at the size of the text around it. */
+.chat-row__title .katex,
+.pane__title .katex,
+.thread-quote__text .katex,
+.reply__quote-text .katex,
+.bookmark-row .katex {
+	font-size: 1em;
+}
+
 /* A wide equation scrolls on its own instead of widening the thread. */
 .katex-display {
 	overflow-x: auto;
