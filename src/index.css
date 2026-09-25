@@ -838,6 +838,17 @@ textarea {
 	overflow-wrap: anywhere;
 }
 
+.bubble .katex-display {
+	margin: 0.4em 0;
+}
+
+/* A wide equation scrolls on its own instead of widening the thread. */
+.katex-display {
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding-block: 2px;
+}
+
 .actions {
 	display: flex;
 	margin: 4px -4px 0 -10px;
