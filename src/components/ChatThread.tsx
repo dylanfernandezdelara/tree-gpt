@@ -10,6 +10,7 @@ import {
 	type ReactNode,
 	type UIEvent,
 } from "react";
+import { findPassage, passageText, touchesMath } from "../lib/passage";
 import {
 	rememberThreadView,
 	scrollTopForMount,
@@ -261,10 +262,15 @@ export function ChatThread({
 				setAnchor(null);
 				return;
 			}
-			const quote = selection.toString().trim();
 			const range = selection.getRangeAt(0);
 			const start = messageOf(range.startContainer, thread);
 			const end = messageOf(range.endContainer, thread);
+			const message = start ? messageElement(thread, start) : null;
+			// Over typeset math the native text is garbled MathML; read formulas as TeX.
+			const quote =
+				message && touchesMath(range, message)
+					? passageText(range, message)
+					: selection.toString().trim();
 			if (!quote || !start || start !== end) {
 				setAnchor(null);
 				return;
@@ -555,7 +561,12 @@ function findQuote(message: HTMLElement, quote: string): Range | null {
 		}
 		node = walker.nextNode();
 	}
-	return null;
+	// A quote with formulas holds their TeX, which no single text node does.
+	return message.querySelector(".katex") ? findPassage(message, quote) : null;
+}
+
+function messageElement(thread: HTMLElement, messageId: string): HTMLElement | null {
+	return thread.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
 }
 
 /** The id of the message containing a node, when it is inside this thread. */
