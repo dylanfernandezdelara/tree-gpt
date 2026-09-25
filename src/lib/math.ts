@@ -2,8 +2,9 @@
  * Rewrites model LaTeX into the delimiters remark-math understands, before
  * markdown parsing. Models mix `\(…\)` / `\[…\]` (which CommonMark would read
  * as escaped brackets) with `$…$` / `$$…$$`, write one-line `$$…$$` blocks
- * that remark-math would set inline, and use bare `$5` for money. Code
- * blocks and code spans are left untouched.
+ * that remark-math would set inline, and use bare `$5` for money. Pasted
+ * `\begin{align}…\end{align}` blocks get the `$$` they lack. Code blocks and
+ * code spans are left untouched.
  */
 export function normalizeMath(markdown: string): string {
 	if (!/[$\\]/.test(markdown)) {
@@ -59,8 +60,23 @@ function normalizeText(text: string): string {
 			// Anything left mid-sentence.
 			.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex: string) => `$$${tex}$$`)
 			.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex: string) => `$${tex.trim()}$`)
+			.replace(BARE_ENVIRONMENT, (block: string, indent: string, _name: string, offset: number, all: string) =>
+				// Already inside a `$$` block: leave it to that block.
+				(all.slice(0, offset).match(/\$\$/g)?.length ?? 0) % 2 === 1
+					? block
+					: `${indent}$$\n${block.replace(/\\label\{[^}]*\}/g, "")}\n${indent}$$`,
+			)
 	);
 }
+
+/**
+ * A display environment pasted or written with no `$$` around it, from its
+ * own `\begin{…}` line to the matching `\end{…}` line. Only environments
+ * KaTeX can set; `multline`, `eqnarray` and friends stay text rather than
+ * turning into a red error. `\label` is dropped, since KaTeX has no refs.
+ */
+const BARE_ENVIRONMENT =
+	/^([ \t]*)\\begin\{((?:equation|align|alignat|gather|aligned|gathered|split|cases|[pbvBV]?matrix|array|CD)\*?)\}[\s\S]*?\\end\{\2\}[ \t]*$/gm;
 
 /**
  * Pandoc's rule for single-dollar math, so money stays text: `$` opens only

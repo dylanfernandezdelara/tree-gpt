@@ -252,4 +252,16 @@ describe("MessageView chain of thought", () => {
 		expect(html).toContain("Tickets cost $5 and $10.");
 		expect(html).not.toContain("\\(");
 	});
+
+	it("typesets a bare align environment as display math", () => {
+		const html = render({
+			id: "m9",
+			role: "assistant",
+			createdAt: 9,
+			content: "Pasted:\n\\begin{align}\\label{eq:1}\nf(x) &= x^2 \\\\\nf'(x) &= 2x\n\\end{align}",
+		});
+		expect(count(html, "katex-display")).toBe(1);
+		expect(html).not.toContain("katex-error");
+		expect(html).not.toContain("\\begin{align}</p>");
+	});
 });
