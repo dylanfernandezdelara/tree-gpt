@@ -25,7 +25,7 @@
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
     "cn": "^0.2.6",
-    "katex": "^0.18.7",
+    "katex": "^0.16.47",
     "lucide-react": "^1.42.0",
     "motion": "^13.2.0",
     "motion-panels": "^0.4.0",

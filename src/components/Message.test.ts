@@ -239,4 +239,17 @@ describe("MessageView chain of thought", () => {
 		expect(html).toContain("katex-display");
 		expect(html).not.toContain("$\\det");
 	});
+
+	it("typesets \\( \\) and \\[ \\] math and leaves money as text", () => {
+		const html = render({
+			id: "m7",
+			role: "assistant",
+			createdAt: 7,
+			content: "Energy is \\(E = mc^2\\).\n\n\\[\n\\int_0^1 x\\,dx = \\tfrac12\n\\]\n\nTickets cost $5 and $10.",
+		});
+		expect(count(html, 'class="katex"')).toBe(2);
+		expect(count(html, "katex-display")).toBe(1);
+		expect(html).toContain("Tickets cost $5 and $10.");
+		expect(html).not.toContain("\\(");
+	});
 });
