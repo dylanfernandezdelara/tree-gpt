@@ -85,8 +85,12 @@ function normalizeText(text: string): string {
  * KaTeX can set; `multline`, `eqnarray` and friends stay text rather than
  * turning into a red error. `\label` is dropped, since KaTeX has no refs.
  */
-const BARE_ENVIRONMENT =
-	/^([ \t]*)\\begin\{((?:equation|align|alignat|gather|aligned|gathered|split|cases|[pbvBV]?matrix|array|CD)\*?)\}[\s\S]*?\\end\{\2\}[ \t]*$/gm;
+const ENVIRONMENTS = String.raw`(?:equation|align|alignat|gather|aligned|gathered|split|cases|[pbvBV]?matrix|array|CD)\*?`;
+const BARE_ENVIRONMENT = new RegExp(
+	String.raw`^([ \t]*)\\begin\{(${ENVIRONMENTS})\}[\s\S]*?\\end\{\2\}[ \t]*$`,
+	"gm",
+);
+const ENVIRONMENT_OPEN = new RegExp(String.raw`^\\begin\{(${ENVIRONMENTS})\}`);
 
 /**
  * Pandoc's rule for single-dollar math, so money stays text: `$` opens only
@@ -256,3 +260,86 @@ function scanMath(
 	}
 	flush();
 }
+
+/**
+ * A streaming reply cut before any math that has opened but not yet closed,
+ * so `$$\frac{a}{` shows nothing until its `$$` arrives instead of raw TeX
+ * that snaps into a formula. A lone `$` only holds when it reads as math
+ * (not money like `$5`) and only to the end of its paragraph, so money
+ * never stalls.
+ */
+export function settledMath(markdown: string): string {
+	if (!/[$\\]/.test(markdown)) {
+		return markdown;
+	}
+	let offset = 0;
+	for (const part of splitCode(markdown)) {
+		if (!part.code) {
+			const open = openMath(part.text);
+			if (open >= 0) {
+				return markdown.slice(0, offset + open).trimEnd();
+			}
+		}
+		offset += part.text.length;
+	}
+	return markdown;
+}
+
+/** Where an unclosed math span starts in prose, or -1. */
+function openMath(text: string): number {
+	let i = 0;
+	scan: while (i < text.length) {
+		if (text.startsWith("\\begin{", i)) {
+			const lineStart = text.lastIndexOf("\n", i - 1) + 1;
+			const name = ENVIRONMENT_OPEN.exec(text.slice(i))?.[1];
+			if (name && /^[ \t]*$/.test(text.slice(lineStart, i))) {
+				const end = text.indexOf(`\\end{${name}}`, i);
+				if (end < 0) {
+					return lineStart;
+				}
+				i = end + name.length + 6;
+				continue;
+			}
+		}
+		for (const [open, close] of DELIMITERS) {
+			if (text.startsWith(open, i)) {
+				const end = text.indexOf(close, i + open.length);
+				if (end < 0) {
+					return i;
+				}
+				i = end + close.length;
+				continue scan;
+			}
+		}
+		const ch = text[i];
+		if ((ch === "\\" || ch === "$") && i === text.length - 1) {
+			// Could be the first half of `\(` or `$$`.
+			return i;
+		}
+		if (ch === "\\") {
+			i += 2;
+			continue;
+		}
+		if (ch === "$") {
+			const close = closingDollar(text, i);
+			if (close >= 0) {
+				i = close + 1;
+				continue;
+			}
+			if (/\S/.test(text[i + 1]) && !MONEY.test(text.slice(i)) && !text.includes("\n\n", i)) {
+				return i;
+			}
+		}
+		i += 1;
+	}
+	return -1;
+}
+
+/** `$5`, `$1,200.50`, `$5/month`: a lone `$` that is money. Not `$3k`, which reads like `$2k = …`. */
+const MONEY = /^\$\d[\d,]*(?:\.\d*)?(?=[\s.,;:!?)/]|$)/;
+
+const DELIMITERS = [
+	["$$", "$$"],
+	["\\[", "\\]"],
+	["\\(", "\\)"],
+] as const;
