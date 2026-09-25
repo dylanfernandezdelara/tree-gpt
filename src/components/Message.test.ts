@@ -264,4 +264,24 @@ describe("MessageView chain of thought", () => {
 		expect(html).not.toContain("katex-error");
 		expect(html).not.toContain("\\begin{align}</p>");
 	});
+
+	it("typesets math in a user bubble and keeps everything else as typed", () => {
+		const html = render({
+			id: "u1",
+			role: "user",
+			createdAt: 10,
+			content: "Why is *this* $x^2$ and \\(y\\)? It cost $5 and $10.\n$$\\int_0^1 x\\,dx$$",
+		});
+		expect(count(html, 'class="katex"')).toBe(3);
+		expect(count(html, "katex-display")).toBe(1);
+		expect(html).toContain("Why is *this* ");
+		expect(html).toContain("It cost $5 and $10.");
+		expect(html).not.toContain("<em>");
+	});
+
+	it("leaves a user bubble without math as plain text", () => {
+		expect(render({ id: "u2", role: "user", createdAt: 11, content: "a *b* `c` $5" })).toContain(
+			'<div class="bubble">a *b* `c` $5</div>',
+		);
+	});
 });

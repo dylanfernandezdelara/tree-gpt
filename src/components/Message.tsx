@@ -10,6 +10,7 @@ import { ThinkingOrb } from "thinking-orbs";
 import { normalizeMath } from "../lib/math";
 import type { Citation, Message, ToolCall } from "../types";
 import { IconButton } from "./IconButton";
+import { MathText } from "./MathText";
 import {
 	CheckIcon,
 	CopyIcon,
@@ -59,7 +60,9 @@ export const MessageView = memo(
 	if (message.role === "user") {
 		return (
 			<div className="turn turn--user" data-message-id={message.id}>
-				<div className="bubble">{message.content}</div>
+				<div className="bubble">
+					<MathText text={message.content} />
+				</div>
 			</div>
 		);
 	}

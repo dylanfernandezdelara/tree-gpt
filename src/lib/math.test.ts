@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMath } from "./math";
+import { normalizeMath, splitMath } from "./math";
 
 describe("normalizeMath", () => {
 	it("turns \\( \\) into inline $ math", () => {
@@ -46,5 +46,43 @@ describe("normalizeMath", () => {
 		expect(normalizeMath("see \\begin{cases} x \\end{cases} inline")).toBe(
 			"see \\begin{cases} x \\end{cases} inline",
 		);
+	});
+});
+
+describe("splitMath", () => {
+	const text = (t: string) => ({ kind: "text", text: t });
+	const inline = (tex: string) => ({ kind: "math", tex, display: false });
+	const display = (tex: string) => ({ kind: "math", tex, display: true });
+
+	it("leaves text without math as one verbatim segment", () => {
+		expect(splitMath("a *b* # c \\ d")).toEqual([text("a *b* # c \\ d")]);
+	});
+
+	it("finds $, \\( \\) and $$ math and keeps markdown-ish text literal", () => {
+		expect(splitMath("Is *this* $x^2$ or \\(y\\)?")).toEqual([
+			text("Is *this* "),
+			inline("x^2"),
+			text(" or "),
+			inline("y"),
+			text("?"),
+		]);
+		expect(splitMath("Solve\n$$x = 1$$\nplease")).toEqual([text("Solve"), display("x = 1"), text("please")]);
+	});
+
+	it("keeps money, shell variables and code as text", () => {
+		expect(splitMath("It costs $5 and $10.")).toEqual([text("It costs $5 and $10.")]);
+		expect(splitMath("echo $PATH and $HOME")).toEqual([text("echo $PATH and $HOME")]);
+		expect(splitMath("run `echo $x$` then\n```\n\\(a\\)\n```")).toEqual([
+			text("run `echo $x$` then\n```\n\\(a\\)\n```"),
+		]);
+		expect(splitMath("unclosed $$x and \\(y")).toEqual([text("unclosed $$x and \\(y")]);
+	});
+
+	it("takes a pasted environment as display math, without \\label", () => {
+		expect(splitMath("From the paper:\n\\begin{align}\\label{e}\na &= b\n\\end{align}\nThoughts?")).toEqual([
+			text("From the paper:"),
+			display("\\begin{align}\na &= b\n\\end{align}"),
+			text("Thoughts?"),
+		]);
 	});
 });
